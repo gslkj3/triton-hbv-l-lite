@@ -34,6 +34,10 @@ surface is closed and a clean measurement environment is available.
 
 Key locations:
 
+- [`docs/l-lite-understanding-guide.zh-CN.md`](docs/l-lite-understanding-guide.zh-CN.md):
+  Chinese causal-domain guide covering what each mechanism/subdomain is, why
+  it exists, how it is legalized and materialized, and the boundary between
+  L-lite and the main L project;
 - `python/triton/l_lite/`: typed factor ontology, composition legality and
   native-autotune control;
 - `lib/Dialect/Triton/Transforms/HBVLoop.cpp`: Bridge and route
