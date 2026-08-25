@@ -34,6 +34,10 @@ surface is closed and a clean measurement environment is available.
 
 Key locations:
 
+- [`docs/l-lite-project-architecture-design.zh-CN.md`](docs/l-lite-project-architecture-design.zh-CN.md):
+  complete Chinese architecture review comparing the pinned native Triton
+  baseline with every L-lite implementation change, including current public
+  integration gaps and review gates;
 - [`docs/l-lite-understanding-guide.zh-CN.md`](docs/l-lite-understanding-guide.zh-CN.md):
   Chinese causal-domain guide covering what each mechanism/subdomain is, why
   it exists, how it is legalized and materialized, and the boundary between
