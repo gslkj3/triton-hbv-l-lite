@@ -5,7 +5,8 @@
 > 原生 Triton 基线：`7c56a5e40f7fd928dfd5c72902d5def0097db73a`（Triton 3.6.0）
 > 本文范围：提交 `25bca1f4e` 相对上述原生基线的全部 27 个文件级改动；本文是其后
 > 新增的评审交付物，不计入该 27 文件实现快照
-> 不包含：L 主项目的性能预测器、拟合参数、残差、区间、发布决策和私有实验账本
+> 不包含：L 主项目的预测器源码、拟合参数和私有实验账本；本文第二部分补充其架构、
+> 算法责任与当前完成状态，但不把私有实现复制进 L-lite
 
 ## 0. 评审摘要
 
@@ -1060,3 +1061,506 @@ A  test/Triton/hbv-loop-runtime-mask-authority.mlir
 ```
 
 本架构设计书是第 28 个差异文件；它描述而不改变上述实现快照。
+
+# 第二部分：L 主项目的预测、校准与安全发布体系
+
+## 20. 为什么在 L-lite 之后介绍主 L
+
+L-lite 与主 L 不是两套循环编译器。两者应共享完全相同的：
+
+- 循环观察对象和 Provider 事实；
+- Bridge、软件流水、完全展开+重排、完全展开+向量化的因果语义；
+- factor/subject ontology；
+- 合法性、物化、artifact、正确性和类型化拒绝；
+- 完整 CandidateCompiler 与 acquisition 账本。
+
+它们只在正确候选已经形成后分岔：
+
+```text
+                                ┌─ L-lite：全部实测 → native autotune winner
+共享 CandidateCompiler ─────────┤
+                                └─ 主 L：分域预测 → 安全下界 → hot-key 发布
+```
+
+因此主 L 的科学问题是：在不对每个候选做 exhaustive timing 的前提下，能否用可解释的
+上游因果链与低容量后端统计代理，安全判断哪个候选值得发布。L-lite 则给出“如果愿意
+支付全部 acquisition，最佳候选是什么”的实验对照。
+
+## 21. 主 L 的完整证据链
+
+主 L 目标链条如下：
+
+```text
+IR / Provider 事实
+  → Pass 前强语义状态
+  → Pass 专属因果转移
+  → 可识别核心环境状态
+  → 弱语义传播
+       ├─ 传播受 Pass 改变的终态属性
+       └─ 传播不受该 Pass 改变、但决定时间的环境属性
+  → 跨代弱语义学习残差
+  → 完整预编译终态
+  → Candidate 编译与 typed PTX/live-shape
+  → 分域后端统计代理
+  → O/B/C 时间估计与相对加速比
+  → 小幅时间残差
+  → 小幅环境残差
+  → 独立校准的机制区间
+  → hot-key 生命周期发布
+  → 后编译事实与真实执行时间更新下一代
+```
+
+这条链的约束是 **最早责任原则**：如果 Provider、强语义、弱语义或代理中任一层出现
+系统性反例，必须回到该层重推；不能用下游残差、扩大区间或 exact lookup 抹平上游
+错误。
+
+## 22. 强语义、弱语义与环境状态
+
+### 22.1 强语义状态
+
+强语义只表达当前 Pass 直接造成的结构变化。三条 route 分域建模：
+
+| 因果域 | 直接干预 | 强语义终态 |
+|---|---|---|
+| Bridge | program ownership 合并 | physical/logical program 关系、构造循环及 program-footprint 证书 |
+| 软件流水 | stage request | live loop、异步 load service、stage 和跨迭代 service 结构 |
+| 完全展开+重排 | factor grouping + phase reorder | main/tail、operation group、依赖保持与重排终态 |
+| 完全展开+向量化 | factor grouping + exact packing | logical group、vector container、main/tail 与 subtype 终态 |
+
+“后续所有发生变化的 IR 字段”不都属于强语义。Pass 直接变化是因，随后由该变化触发
+的 instruction count、live range、资源压力等多为中间变量或后端响应。把所有终态字段
+塞进强语义会把因果方向倒置。
+
+### 22.2 弱语义传播
+
+弱语义模型承担两种传播：
+
+1. 把强语义中受 Pass 影响的核心状态传播到预编译终态；
+2. 把强语义不直接改变、但时间代理需要的可识别环境状态传播到终态。
+
+第二类例如 dtype、元素宽度、逻辑 program 数、输入/输出字节、算术量、trip/tail、
+目标架构显式容量等。它们不能因为“不在当前 Pass 因果域”就统一丢给环境残差。
+
+### 22.3 弱语义学习残差
+
+弱语义的主体映射是有因果解释的传播模型。学习残差只修正同一因果分支在编译代际或
+同类目标上的小幅系数漂移：
+
+- 必须 generation-delayed，不能读取同一代真实时间再修正同一代决策；
+- 代理定义或输入语义改变时必须清零，从头拟合；
+- 容量必须低于主体代理，且只能在独立数据上证明“小而稳定”；
+- 因果分支翻转不是残差，应进入独立架构迁移风险报告。
+
+## 23. 为什么采用 O/B/C 顺序估计量
+
+Bridge 和 route 是两个顺序独立 Pass。如果只比较 Original 与最终 Candidate，目标
+`log(T_O/T_C)` 同时包含 Bridge 和 route 两种作用，某个 route 模型会被迫解释不属于
+自己的 Bridge 收益。
+
+主 L 因而对每个组合候选保留三个真实 artifact：
+
+```text
+O = Original
+B = Bridge-only terminal
+C = Bridge terminal + one route terminal
+```
+
+定义：
+
+```text
+L_bridge       = log(T_O / T_B)
+L_route|bridge = log(T_B / T_C)
+L_total        = log(T_O / T_C)
+L_total        = L_bridge + L_route|bridge
+```
+
+最后一个式子是代数恒等式，不是需要拟合的第五个模型。Bridge factor=1 时，B 必须与
+O artifact-identical，`L_bridge=0` 精确成立，不能用两次有噪声的重复 timing 估计。
+
+这一分解带来四个独立预测组件：
+
+1. 一个所有 route 共用的 Bridge `O→B` 组件；
+2. 软件流水的 `B→C` 组件；
+3. 完全展开+重排的 `B→C` 组件；
+4. 完全展开+向量化的 `B→C` 组件。
+
+route 组件可以读取完整、命名明确的 B 终态，但不能重新拥有 Bridge factor 的因果
+解释。联合候选的预测由两个组件相加得到。
+
+## 24. typed PTX/live-shape 后端统计代理
+
+### 24.1 为什么需要统计代理
+
+上游可以白盒解释 Pass 做了什么，但寄存器分配、spill、instruction scheduling、
+issue overlap 等后端行为不能总从 TTIR 精确推导。主 L 不以回归模型替换上游因果链，
+而是在上游终态闭合后，以较粗粒度的后端响应块预测时间。
+
+这形成“上游因果闭环 + 后端统计代理闭环”：
+
+- 上游字段必须有 Provider/强/弱语义 producer；
+- 后端代理只接收 Candidate 编译前或 typed PTX 后、真实执行前可获得的字段；
+- 代理内部不宣称每个系数都是独立物理因果；
+- 代理整体必须在 family-disjoint 数据上形成小圈子闭环。
+
+### 24.2 最小充分粗因果状态
+
+代理状态分两层：
+
+#### P0：机制核心
+
+- Bridge/route factor 的正确语义；
+- logical/physical program 数；
+- input/output bytes 和 arithmetic elements；
+- trip、main/tail 和 tail fraction；
+- route-specific stage/group/subtype；
+- 显式目标架构能力；
+- B 终态中由 route 消费的命名服务状态。
+
+#### P1：typed PTX/backend shape
+
+- instruction count 和命令类别的粗分组；
+- memory instruction count；
+- peak typed live slots 与 live-area；
+- O→B 或 B→C 的 typed PTX 轴向比值；
+- 不携带 kernel/family identity 的 live-shape response。
+
+P1 不能因为训练误差下降就自动进入模型。只有在 paired whole-family bootstrap 中，P1
+相对 P0 在独立外层 fold 上显著降低发布风险，才允许加深代理。
+
+### 24.3 禁止输入
+
+当前代理不得读取：
+
+- kernel/family identity、源码路径或 hash 作为特征；
+- 温度、功率、时钟、utilization、测量顺序；
+- 原始 pointer 值；
+- 同代真实执行时间；
+- ptxas 的最终 allocation/spill 结果、SASS 或 winner identity；
+- 旧版本误差、残差或已经披露的 qualification/sealed 标签。
+
+温度、功率和 utilization 可以用于判断测量环境是否有效，但不能进入因果预测链。
+
+### 24.4 后端深度停止门
+
+如果当前粗代理已经满足独立 family 的精度、方向、区间和 false-adoption 门，就停止
+继续拆解后端。继续加深必须同时满足：
+
+1. 新字段在 decision time 有独立、可解释的 producer；
+2. 不是从最终时间反推出来的隐性 identity；
+3. 在预注册的独立 holdout 上显著降低发布风险；
+4. 没有显著增加跨架构重新学习成本。
+
+因此目标不是复制整个 GPU backend，而是找到足以支撑安全发布的最浅统计闭环。
+
+## 25. 代理模型族与最小参数原则
+
+### 25.1 domain-local first
+
+四个组件先独立选择自己的状态、交互和模型。允许复用相同的特征变换、归一化和低容量
+算法，但不能为了强行统一而改变某个因果域的最小充分状态。只有各域先闭环后，才分析
+能否建立有条件的部分共享模型。
+
+### 25.2 当前低容量模型路线
+
+当前预注册路线使用 label-free farthest-center RBF ridge：
+
+1. 在任何 timing label 进入前，用 feature geometry 选择中心；
+2. normalization 与中心选择都在每个训练 fold 内完成；
+3. 用 whole physical family 做独立单位和 leave-one-family-out；
+4. ridge 只拟合 RBF 权重，不选择 identity patch；
+5. 每个 fold 的 effective degrees of freedom 不得超过训练 family 数的一半；
+6. Bridge 允许比单 route 稍高但仍有界的中心候选；route 使用更小中心候选；
+7. 同精度时选择字段更少、中心更少、有效自由度更低的模型。
+
+RBF 是当前预注册候选，不是不可修改的永恒结论。如果系统性 subgroup 失败，外层循环
+必须重新审查：
+
+- 参数集合；
+- 因果域划分；
+- 交互图；
+- 模型族；
+- 参数可识别性和 family 支撑。
+
+不能只在现有 RBF 上增加一个局部 patch。
+
+### 25.3 最小参数组合验收
+
+若两个模型的 family-disjoint 误差、方向覆盖、区间覆盖和 false-adoption 都在可接受
+范围内，则认为精度等价，并选择：
+
+```text
+更少 causal fields
+  → 更少 interaction blocks
+  → 更少 centers / 更低 effective DoF
+  → 更浅 backend depth
+```
+
+“最小”不是只比较参数数量，而是在发布后果等价的条件下比较模型容量。
+
+## 26. 内外循环如何工作
+
+### 26.1 内层循环
+
+内层只修复已经确定的最早 owner，例如：
+
+- schema/序列化实现错误；
+- 同一证书公式实现与定义不一致；
+- 一个已注册 proxy block 的数值实现错误；
+- fold-local normalization 或 capacity gate 的 bug。
+
+内层禁止加入 kernel 名、shape identity、温度、功率、测量顺序、same-generation outcome
+或只服务一个失败样本的 indicator。
+
+### 26.2 外层循环
+
+任一注册 subgroup 出现系统性 signed bias，按最早责任回退：
+
+```text
+事实错             → Provider
+Pass 变化错         → Strong
+终态传播错          → Weak
+对象放错域          → domain partition
+字段/交互不足       → backend proxy state / interaction graph
+同一状态仍不稳定    → model family / granularity
+独立校准才出现尾部  → residual / interval
+环境不合格          → measurement protocol，整角色无效
+```
+
+subgroup 至少包括因果域、Bridge factor、route factor/stage、trip 是否精确、tail fraction、
+memory geometry 是否可识别和 typed PTX response sign pattern。family identity 是重采样
+单位，不是模型特征。
+
+## 27. 数据分层与防拟合设计
+
+### 27.1 Development
+
+用于选择 P0/P1、模型容量和外层修复。必须按 whole physical family 分 fold。development
+中的正预测只表示方向诊断，不具有 release authority。
+
+### 27.2 Qualification
+
+在模型结构、字段、中心选择规则和容量冻结后才打开。qualification 可以判断模型是否
+合格，但不能反向修改当代模型。
+
+### 27.3 Calibration / untouched holdout
+
+只用于校准残差和预测区间、检查方向/覆盖/false-adoption。任何系统性 subgroup 失败都
+返回上游，而不是塞进区间。
+
+### 27.4 Sealed hot keys
+
+只在前面全部门通过后打开，用于最终生命周期价值与发布后果。sealed 结果永不调整
+同一代模型、阈值或候选空间。
+
+### 27.5 数据污染处理
+
+无法证明是在要求的独占/稳定环境下采集的 timing，只能保留为工程诊断或失效证据，
+不得进入模型、残差、区间、holdout 或发布。过去的“证伪”若依赖未证明独占的计时，
+必须降级并在干净环境重测。
+
+## 28. 残差、区间、查表与迁移风险的分工
+
+| 对象 | 学习什么 | 数据时序 | 不能吸收什么 |
+|---|---|---|---|
+| 弱语义学习残差 | 完整弱语义/代理映射跨代的小漂移 | generation-delayed | 因果分支翻转、上游字段缺失 |
+| domain time residual | 合格分域代理剩余的小时间偏差 | fresh calibration | 系统性 subgroup、错误域划分 |
+| environment residual | 主要可观测环境因素传播后的小 common-mode 漂移 | 同环境独立校准 | 温度/功率特征、外部干扰、无效测量 |
+| mechanism radius | in-domain 不可消除尾部的 q80/q95 覆盖 | family-calibrated | 架构迁移、错误 center、未建模机制 |
+| exact measured lookup | 同一 hot key 已执行后的实测复用 | post-execution | 新 key 的因果证明、模型资格 |
+| architecture migration risk | 跨架构后因果边可能翻转的模型有效性风险 | 独立迁移审计 | 当前架构区间或发布决策 |
+
+这些对象不能相加后互相吸收。特别是：
+
+- 当前架构的模型内不确定性进入残差/机制半径；
+- 跨架构因果翻转只进入独立迁移风险报告；
+- 迁移风险不能扩大当前发布区间；
+- 无法解释的环境变量宁可使证书失败，也不能污染强语义→Pass→窄域时间链。
+
+## 29. 预测区间与发布下界
+
+模型先预测四个组件中心：
+
+```text
+L̂_total = L̂_bridge + L̂_route|bridge
+```
+
+残差和机制半径只有在组件中心通过独立 qualification 后才允许拟合。区间至少要报告
+q80 和 q95，且以 whole family 校准。发布使用的是 total benefit 的安全下界，而不是
+中心点：
+
+```text
+lower_bound(L_total) > 0
+```
+
+仍不足以直接发布，还要把 acquisition 和生命周期成本换算到 hot key 的预计复用次数。
+如果覆盖失败、interval 过宽或出现 false adoption，发布回到 Original。
+
+## 30. hot-key 生命周期价值
+
+### 30.1 为什么只发布极热 kernel
+
+一次性或低复用 kernel 无法摊销 Candidate 编译、代理推理、正确性和必要校准开销。
+主 L 应优先识别长期重复的 hot key；冷 key 直接使用 Original，不做深度优化。
+
+### 30.2 选择规则
+
+对每个 hot key，在 Original 和所有合法、正确、区间合格的组合候选中，最多选择一个
+安全收益下界最高的 route/factor。不是每个 route 各选一个，也不是在同一 kernel 内
+同时发布多套互相冲突的全局计划。
+
+### 30.3 价值公式
+
+概念上的净生命周期价值为：
+
+```text
+gross_saved
+  = expected_reuse_count ×
+    (T_original - T_candidate - steady_runtime_overhead)
+
+net_value
+  = gross_saved
+    - candidate_compile_acquisition
+    - required_measurement_or_correctness_acquisition
+    - proxy_inference_cost
+    - cache/storage_cost
+    - execution_interference_cost
+```
+
+只有安全下界下的 `net_value>0` 才允许发布。报告必须同时给出冷 key 排除机会、
+false-adoption、break-even reuse count 和 steady overhead。
+
+## 31. 生产运行与反馈
+
+建议的生产流程为：
+
+```text
+第一次遇到 specialization/key
+  → 共享 CandidateCompiler 生成合法且正确候选
+  → 主 L 读取预执行 causal state + typed PTX/live-shape
+  → 四组件代理预测中心和区间
+  → heat/lifecycle gate
+  → 选择 Original 或一个 Candidate
+  → 执行
+  → 保存 key、Plan/artifact identity、环境有效性和真实 T_execution
+  → 只用于下一代 residual/lookup/update
+```
+
+保存实际运行 key 和结果本身开销很小，应保留；但同代执行结果不能回填同代发布证书。
+exact lookup 可以让同一 key 后续直接复用真实数据，却不能证明未见 key 的泛化。
+
+## 32. 环境 authority
+
+高精度性能角色不应强绑定某个固定设备编号。正确设计是 device-selected：
+
+1. 只读发现一张允许使用且空闲的物理 GPU；
+2. 记录 index、UUID、架构和 driver/runtime identity；
+3. 获取共享 request/advisory lock；
+4. 连续观察无外部 context、SM idle 和允许的 slowdown；
+5. 在一个不可拆分的 O/B/C 原子角色内持续监控；
+6. 任一外部 PID、请求切换或 stationarity 失败使整个角色无效；
+7. 无效角色不进入任何模型/残差/区间。
+
+GPU index 只是本机枚举，不是证据 identity；UUID 和连续环境观察才是。编译/正确性
+角色可以使用共享 GPU，但必须显式禁止 performance authority。
+
+## 33. 架构迁移
+
+迁移到新架构时把弱语义边分成三类：
+
+| 情况 | 处理 |
+|---|---|
+| 结构与因果分支保持，系数小漂移 | generation-delayed learning residual 可调整 |
+| 因果分支可能翻转 | 独立报告失效误差和发布风险；不自动扩大当前区间 |
+| 数据不足，无法判断是否翻转 | 仍报告风险；保持 Original 或由使用者决定是否重新拟合 |
+
+若重新拟合所需事实可在正常 Triton 编译/运行反馈中自动获得，可提供固定自动拟合；若
+需要用户源码安装、手工调试或重新开发整个工程，则不能作为 wheel 用户的隐含前提，
+只能报告风险并保守不发布。
+
+## 34. 论文证书与 HBV 服务边界
+
+### 34.1 正向闭环
+
+论文可信的正向结论需要逐层证明：
+
+- 每个 Provider 字段有独立 producer；
+- 强语义只拥有 Pass 直接变化；
+- Weak 正确传播受影响状态和核心环境状态；
+- typed PTX/live-shape 代理使用最小充分状态；
+- 四组件模型 family-disjoint 合格；
+- 残差小、区间覆盖且无系统 subgroup；
+- sealed hot-key 下界有正生命周期价值；
+- 生产行为与证书后果一致。
+
+### 34.2 合法失败出口
+
+如果每个 in-scope 模块都完成责任，而剩余误差可证实来自不可观测后端分配、无法暴露
+的架构状态或外部 measurement validity，则可以归入 HBV 服务边界之外。不能仅因问题
+困难就提前退出。
+
+### 34.3 变量剥离账本
+
+最终必须单独记录从“工程成功”到“论文证书版”剥离的每个变量：
+
+- 旧工程为何使用它；
+- 它看似带来多少收益/精度；
+- 为什么没有独立因果 producer；
+- 剥离后哪些 key、候选或收益消失；
+- 为什么不能归到学习残差、环境残差、time residual、机制半径或 exact lookup；
+- 最终是修复上游、保守排除，还是归入 HBV 服务边界之外。
+
+只有到最终合法出口冻结后，才生成只读的逐 key“工程成功版→论文归因版”收益变迁
+报告；该报告是审计结果，不是内外循环的控制变量。
+
+## 35. L-lite 与主 L 的接口契约
+
+| 阶段 | L-lite | 主 L | 是否必须一致 |
+|---|---|---|---|
+| census/Provider | 使用 | 使用 | 是 |
+| factor/subject ontology | 使用 | 使用 | 是 |
+| PlanBundle/CandidateCompiler | 使用 | 使用 | 是 |
+| 合法性/物化/artifact/correctness | 使用 | 使用 | 是 |
+| 请求 candidate domain | exhaustive | 同一完整域后由发布门选择 | 是，不能少能力 |
+| candidate selection | native timing | 四组件代理安全下界 | 否 |
+| acquisition | 全部编译+全部实测 | 全部必要编译+少量/延迟实测 | 分别报告 |
+| residual/interval | 无 | 有 | 不共享 |
+| hot-key lifecycle gate | 对照报告 | 生产发布 authority | 不共享 |
+
+共享 CandidateCompiler 是两者公平对比的关键：后续新增通用 subject 或 route
+materializer 时，应一次实现并同步暴露给两条选择路径，而不是维护两份行为近似的编译器。
+
+## 36. 当前完成状态
+
+截至本文评审版本，可以确认：
+
+- 当前主 L 与 L-lite 已同步一套规则式合法性/物化源码能力；
+- 当前开发 population 的完整请求网格已完成 typed disposition、真实物化、TTIR
+  postcondition 和正确性闭环；
+- O/B/C 顺序估计量、四组件 typed-PTX 代理、低容量模型协议、外层回退规则和独立
+  population 分层已经在性能标签前冻结；
+- 旧 mixed `O→C` route 估计量和旧残差不再具有当前 authority。
+
+尚不能确认：
+
+- 新四组件代理的开发精度、方向和 subgroup 闭环；
+- qualification/holdout 的独立覆盖；
+- generation-delayed residual、环境 residual 和 q80/q95 区间；
+- sealed hot-key 的正生命周期价值；
+- 最终论文发布或生产 Go。
+
+根因不是合法性/物化仍未闭环，而是顺序估计量重构后尚未采集一套满足严格、可切换
+device authority 的新鲜 O/B/C 性能标签。当前 residual、radius 和 release 必须保持
+关闭，不能引用旧总估计量标签提前宣布成功。
+
+## 37. 主 L 预测体系的评审重点
+
+1. O/B/C 三 artifact 是否由同一 CandidateCompiler 产生并在一个原子角色测量；
+2. 四组件是否真的 domain-local，是否存在 route 模型偷偷读取 Bridge patch 字段；
+3. P0/P1 promotion 是否使用 whole-family 独立证据；
+4. 同精度下是否选择最小 causal field/interaction/center 组合；
+5. 系统性 subgroup 是否回到最早 owner，而非进入残差；
+6. 环境 telemetry 是否只做 validity，不进入预测；
+7. residual、radius、migration risk 和 exact lookup 是否严格分离；
+8. qualification、holdout、sealed 是否都不修改同代模型；
+9. lifecycle 是否计入 Candidate 编译、推理、存储、干扰和失败成本；
+10. 工程收益减少是否最终具有逐 key、逐原因、只读变迁账本。

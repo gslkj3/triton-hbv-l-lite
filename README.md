@@ -37,7 +37,8 @@ Key locations:
 - [`docs/l-lite-project-architecture-design.zh-CN.md`](docs/l-lite-project-architecture-design.zh-CN.md):
   complete Chinese architecture review comparing the pinned native Triton
   baseline with every L-lite implementation change, including current public
-  integration gaps and review gates;
+  integration gaps, review gates, and the downstream main-L prediction,
+  calibration, uncertainty, and lifecycle-release architecture;
 - [`docs/l-lite-understanding-guide.zh-CN.md`](docs/l-lite-understanding-guide.zh-CN.md):
   Chinese causal-domain guide covering what each mechanism/subdomain is, why
   it exists, how it is legalized and materialized, and the boundary between
