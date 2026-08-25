@@ -74,6 +74,8 @@ constexpr StringLiteral kSourceExactTripCountAttr =
     "tt.hbv.l.source_exact_trip_count";
 constexpr StringLiteral kProviderBoundMembersAttr =
     "tt.hbv.l.provider_bound_members";
+constexpr StringLiteral kPipelineMemberRefAttr =
+    "tt.hbv.l.pipeline_member_ref";
 constexpr StringLiteral kBridgeFactorAttr = "tt.loop_bridge.factor";
 constexpr StringLiteral kBridgeCardinalityAttr =
     "tt.loop_bridge.grouped_program_count";
@@ -93,6 +95,15 @@ constexpr StringLiteral kBridgeAxisExtentAttr =
 constexpr StringLiteral kBridgeDiscoveryAttr = "tt.loop_bridge.discovery";
 constexpr StringLiteral kBridgeRoleAttr = "tt.loop_bridge.role";
 constexpr StringLiteral kBridgeOrdinalAttr = "tt.loop_bridge.ordinal";
+constexpr StringLiteral kBridgeGroupRefAttr = "tt.loop_bridge.group_ref";
+constexpr StringLiteral kOperationGroupRefAttr =
+    "tt.hbv.l.operation_group_ref";
+constexpr StringLiteral kPhaseOperationGroupCountAttr =
+    "tt.hbv.l.phase_operation_group_count";
+constexpr StringLiteral kPhaseOperationReorderedCountAttr =
+    "tt.hbv.l.phase_operation_reordered_count";
+constexpr StringLiteral kVectorizedOperationGroupCountAttr =
+    "tt.hbv.l.vectorized_operation_group_count";
 constexpr StringLiteral kBridgePartitionRecurrenceAttr =
     "tt.loop_bridge.partition_recurrence";
 constexpr StringLiteral kExactPrefixVectorElementBudgetAttr =
@@ -119,6 +130,7 @@ constexpr StringLiteral kPhaseRoute = "l.ttir.full_unroll_phase_major.v1";
 constexpr StringLiteral kLogicalRoute = "l.ttir.full_unroll_logical_group.v1";
 constexpr StringLiteral kExactPrefixRoute =
     "l.ttir.predicated_exact_prefix_reduction.v1";
+constexpr StringLiteral kBridgeOnlyRoute = "l.bridge-only.default-route";
 constexpr StringLiteral kOriginalRoute = "l.original.default";
 constexpr StringLiteral kPinnedCompilerCommit =
     "7c56a5e40f7fd928dfd5c72902d5def0097db73a";
@@ -129,6 +141,7 @@ struct ParsedLoopPlan {
   bool nestedSubject = false;
   bool runtimeGuardedLogical = false;
   bool bridgeConstructed = false;
+  bool bridgeOnly = false;
   bool bridgeStaticPartition = false;
   bool composedIntervention = false;
   bool compositionV2 = false;
@@ -142,6 +155,7 @@ struct ParsedLoopPlan {
   bool bridgeTensorLaneFusion = false;
   bool bridgeExactSplitElision = true;
   bool providerBoundSubjectSet = false;
+  bool providerBoundPipelineSubjectSet = false;
   int64_t adapterVersion = 1;
   int64_t bridgeFactor = 1;
   int64_t routeFactor = 1;
@@ -373,16 +387,167 @@ bool hasCertifiedNonzeroIntegerDivisor(Operation *operation) {
   return divisor && *divisor != 0;
 }
 
+bool continuationOperationIsPredicatable(Operation *operation);
+
+bool reductionCombinerIsPredicatable(ReduceOp reduce) {
+  Region &combiner = reduce.getCombineOp();
+  if (!llvm::hasSingleElement(combiner))
+    return false;
+  for (Operation &operation : combiner.front()) {
+    if (isa<ReduceReturnOp>(operation))
+      continue;
+    // A reduction combiner is certified as a closed pure computation.  It
+    // may not acquire memory service merely because its enclosing ReduceOp is
+    // Pure, and every potentially undefined integer divisor retains the same
+    // exact nonzero proof required in the surrounding continuation.
+    if (isa<LoadOp, StoreOp>(operation) ||
+        !continuationOperationIsPredicatable(&operation))
+      return false;
+  }
+  return true;
+}
+
 bool continuationOperationIsPredicatable(Operation *operation) {
   if (auto load = dyn_cast<LoadOp>(operation))
     return load.getBoundaryCheck().empty() && !load.getPadding();
   if (auto store = dyn_cast<StoreOp>(operation))
     return store.getBoundaryCheck().empty();
+  // Triton reductions are single-block Pure regions, but do not implement
+  // MLIR's generic speculatability interface.  Treat them as predicatable
+  // only after recursively proving the combiner contains no memory service,
+  // nested control, non-speculatable operation or unbounded integer divide.
+  // This is an operation-structural rule, independent of kernel/operator
+  // identity and tensor shape.
+  if (auto reduce = dyn_cast<ReduceOp>(operation))
+    return isMemoryEffectFree(operation) &&
+           reductionCombinerIsPredicatable(reduce);
   if (operation->getNumRegions() != 0 || !isMemoryEffectFree(operation))
     return false;
   if (isIntegerDivisionOrRemainder(operation))
     return hasCertifiedNonzeroIntegerDivisor(operation);
   return isSpeculatable(operation);
+}
+
+// Convert a result-free structured conditional inside one Bridge clone into
+// straight-line, predicated service.  This is deliberately an IR rule rather
+// than an operator adapter: every nested branch must be argument-free, return
+// no SSA result, contain only recursively predicatable computation and expose
+// all memory effects as Triton loads/stores.  The branch predicates are folded
+// into those effects before the regions are inlined.  Consequently the
+// phase-major materializer can see real top-level load/store roots without
+// speculating an observable effect from the inactive branch.
+LogicalResult predicateAndInlineBridgeIf(scf::IfOp ifOp, int64_t ordinal,
+                                         std::string &failureReason) {
+  if (ifOp.getNumResults() != 0) {
+    failureReason = "structured_if_has_escaping_results";
+    return failure();
+  }
+  std::string groupPrefix =
+      ifOp->getAttrOfType<StringAttr>(kBridgeGroupRefAttr)
+          ? ifOp->getAttrOfType<StringAttr>(kBridgeGroupRefAttr).getValue().str()
+          : (Twine("ordinal:") + Twine(ordinal)).str();
+  auto prepareRegion = [&](Region &region, StringRef branch) -> LogicalResult {
+    if (region.empty())
+      return success();
+    if (!llvm::hasSingleElement(region) || region.front().getNumArguments()) {
+      failureReason = "structured_if_region_is_not_single_argument_free_block";
+      return failure();
+    }
+    Block &block = region.front();
+    SmallVector<scf::IfOp> nested;
+    int64_t operationIndex = 0;
+    for (Operation &operation : block.without_terminator()) {
+      std::string operationRef =
+          (Twine(groupPrefix) + "/" + branch + ":" +
+           Twine(operationIndex++))
+              .str();
+      operation.setAttr(kBridgeGroupRefAttr,
+                        StringAttr::get(operation.getContext(), operationRef));
+      if (auto child = dyn_cast<scf::IfOp>(operation))
+        nested.push_back(child);
+    }
+    for (scf::IfOp child : nested)
+      if (failed(predicateAndInlineBridgeIf(child, ordinal, failureReason)))
+        return failure();
+    auto yield = dyn_cast<scf::YieldOp>(block.getTerminator());
+    if (!yield || yield.getNumOperands() != 0) {
+      failureReason = "structured_if_region_has_nonvoid_yield";
+      return failure();
+    }
+    for (Operation &operation : block.without_terminator())
+      if (!continuationOperationIsPredicatable(&operation)) {
+        failureReason =
+            (Twine("structured_if_contains_nonpredicatable_or_unbounded_") +
+             operation.getName().getStringRef())
+                .str();
+        return failure();
+      }
+    return success();
+  };
+  if (failed(prepareRegion(ifOp.getThenRegion(), "then")) ||
+      failed(prepareRegion(ifOp.getElseRegion(), "else")))
+    return failure();
+
+  OpBuilder builder(ifOp);
+  Value condition = ifOp.getCondition();
+  Value one = arith::ConstantOp::create(
+      builder, ifOp.getLoc(), builder.getBoolAttr(true));
+  Value inverse = arith::XOrIOp::create(
+      builder, ifOp.getLoc(), condition, one);
+  auto inlineRegion = [&](Region &region, Value active) {
+    if (region.empty())
+      return;
+    Block &source = region.front();
+    Operation *yield = source.getTerminator();
+    for (Operation &operation : source.without_terminator()) {
+      IRRewriter rewriter(&operation);
+      if (auto load = dyn_cast<LoadOp>(operation)) {
+        Value mask = getPredMask(rewriter, load.getPtr().getType(),
+                                 load.getMask(), active);
+        load.getMaskMutable().assign(mask);
+      } else if (auto store = dyn_cast<StoreOp>(operation)) {
+        Value mask = getPredMask(rewriter, store.getPtr().getType(),
+                                 store.getMask(), active);
+        store.getMaskMutable().assign(mask);
+      }
+    }
+    SmallVector<Operation *> moved;
+    for (Operation &operation : source.without_terminator())
+      moved.push_back(&operation);
+    ifOp->getBlock()->getOperations().splice(
+        Block::iterator(ifOp), source.getOperations(), source.begin(),
+        Block::iterator(yield));
+    // Assign service roles only after moving the complete range.  Predicate
+    // construction operations are ordinary untagged SSA dependencies of the
+    // source operation that consumes them; they must not invent a new source
+    // operation identity.
+    for (Operation *operation : moved) {
+      if (!operation->hasAttr(kBridgeGroupRefAttr))
+        continue;
+      operation->setAttr(
+          kBridgeRoleAttr,
+          builder.getStringAttr(isa<LoadOp>(operation)
+                                    ? "load"
+                                    : isa<StoreOp>(operation) ? "store" : "compute"));
+      operation->setAttr(kBridgeOrdinalAttr,
+                         builder.getI32IntegerAttr(ordinal));
+    }
+  };
+  inlineRegion(ifOp.getThenRegion(), condition);
+  inlineRegion(ifOp.getElseRegion(), inverse);
+  ifOp.erase();
+  return success();
+}
+
+Block *argumentFreeForwardTarget(Block *block) {
+  if (!block || block->getNumArguments() != 0 ||
+      !block->without_terminator().empty())
+    return nullptr;
+  auto branch = dyn_cast<cf::BranchOp>(block->getTerminator());
+  if (!branch || !branch.getDestOperands().empty() ||
+      branch.getDest() == block || branch.getDest()->getNumArguments() != 0)
+    return nullptr;
+  return branch.getDest();
 }
 
 // Convert one narrowly certified early-return CFG into a straight-line,
@@ -405,11 +570,48 @@ BridgeCFGNormalizationResult
 normalizeSingleEarlyVoidReturnCFG(FuncOp entry) {
   BridgeCFGNormalizationResult result;
   Region &body = entry.getBody();
+
+  // Triton's frontend can encode the same source-level early return with an
+  // argument-free forwarding block and an unreachable forwarding predecessor
+  // of the continuation.  Canonicalize only that empty CFG scaffolding before
+  // matching the proof shape.  No operation carrying a value or effect is
+  // erased or moved by this step, so the accepted causal object remains the
+  // same conditional return plus one continuation.
+  llvm::SmallPtrSet<Block *, 8> reachable;
+  SmallVector<Block *> worklist{&body.front()};
+  while (!worklist.empty()) {
+    Block *block = worklist.pop_back_val();
+    if (!reachable.insert(block).second)
+      continue;
+    for (Block *successor : block->getSuccessors())
+      worklist.push_back(successor);
+  }
+  SmallVector<Block *> unreachableForwarders;
+  for (Block &block : llvm::drop_begin(body.getBlocks()))
+    if (!reachable.contains(&block) && argumentFreeForwardTarget(&block))
+      unreachableForwarders.push_back(&block);
+  for (Block *block : unreachableForwarders)
+    block->erase();
+
+  Block *entryBlock = &body.front();
+  if (auto branch = dyn_cast<cf::CondBranchOp>(entryBlock->getTerminator())) {
+    SmallVector<Block *> foldedForwarders;
+    for (unsigned successorIndex = 0; successorIndex < 2; ++successorIndex) {
+      Block *successor = branch->getSuccessor(successorIndex);
+      Block *target = argumentFreeForwardTarget(successor);
+      if (!target || successor->getSinglePredecessor() != entryBlock)
+        continue;
+      branch->setSuccessor(target, successorIndex);
+      foldedForwarders.push_back(successor);
+    }
+    for (Block *block : foldedForwarders)
+      block->erase();
+  }
+
   if (body.getBlocks().size() != 3) {
     result.reason = "cfg_not_three_blocks";
     return result;
   }
-  Block *entryBlock = &body.front();
   auto branch = dyn_cast<cf::CondBranchOp>(entryBlock->getTerminator());
   if (!branch) {
     result.reason = "entry_not_single_conditional_branch";
@@ -540,42 +742,78 @@ integerFootprint(Value value, Value pid, llvm::SmallPtrSetImpl<Value> &active) {
     return AffinePidFootprint{1, 0, 0};
   if (auto constant = splatInteger(value))
     return AffinePidFootprint{0, *constant, *constant};
-  // Follow an scf.for region iteration argument to its preheader value when
-  // resolving another affine basis such as a program ID.  The induction
-  // argument itself is independent of that basis; loop-carried values retain
-  // the affine program-axis relation established before the loop.
-  if (auto argument = dyn_cast<BlockArgument>(value)) {
-    if (auto loop = dyn_cast_or_null<scf::ForOp>(
-            argument.getOwner()->getParentOp())) {
-      if (argument.getArgNumber() == 0)
-        return AffinePidFootprint{0, 0, 0};
-      unsigned iterIndex = argument.getArgNumber() - 1;
-      if (iterIndex < loop.getInitArgs().size())
-        return integerFootprint(loop.getInitArgs()[iterIndex], pid, active);
-    }
-  }
-  // Bridge groups only one launch axis.  Any expression independent of that
-  // axis (including another program ID and its quotient/remainder tree) is
-  // fixed across the virtual iterations of one physical program and therefore
-  // cancels from the pairwise disjointness proof.
-  if (!valueDependsOn(value, pid))
-    return AffinePidFootprint{0, 0, 0};
   if (!active.insert(value).second)
     return std::nullopt;
   auto erase = llvm::make_scope_exit([&] { active.erase(value); });
-  if (auto range = value.getDefiningOp<MakeRangeOp>())
-    return AffinePidFootprint{0, range.getStartAttr().getInt(),
-                              range.getEndAttr().getInt() - 1};
+
+  // A local loop coordinate is not a zero-width translation.  Preserve its
+  // exact closed interval when all three controls are static and the positive
+  // SCF step defines at least one executed iteration.  Runtime controls remain
+  // unavailable until a separate predecision bound proof exists.
+  if (auto argument = dyn_cast<BlockArgument>(value)) {
+    if (auto loop = dyn_cast_or_null<scf::ForOp>(
+            argument.getOwner()->getParentOp())) {
+      if (argument.getArgNumber() == 0) {
+        auto lower = splatInteger(loop.getLowerBound());
+        auto upper = splatInteger(loop.getUpperBound());
+        auto step = splatInteger(loop.getStep());
+        if (!lower || !upper || !step || *step <= 0 || *lower >= *upper)
+          return std::nullopt;
+        __int128 distance = static_cast<__int128>(*upper) - *lower - 1;
+        auto last = checkedI64(static_cast<__int128>(*lower) +
+                               (distance / *step) * *step);
+        if (!last)
+          return std::nullopt;
+        return AffinePidFootprint{0, *lower, *last};
+      }
+      unsigned iterIndex = argument.getArgNumber() - 1;
+      Operation *terminator = loop.getBody()->getTerminator();
+      if (iterIndex < loop.getInitArgs().size() &&
+          iterIndex < terminator->getNumOperands() &&
+          terminator->getOperand(iterIndex) == argument)
+        return integerFootprint(loop.getInitArgs()[iterIndex], pid, active);
+      return std::nullopt;
+    }
+  }
+
+  if (auto range = value.getDefiningOp<MakeRangeOp>()) {
+    int64_t start = range.getStartAttr().getInt();
+    int64_t end = range.getEndAttr().getInt();
+    if (end <= start)
+      return std::nullopt;
+    return AffinePidFootprint{0, start, end - 1};
+  }
   Operation *definition = value.getDefiningOp();
   if (!definition)
-    return std::nullopt;
+    return isa<ShapedType>(value.getType())
+               ? std::nullopt
+               : std::optional<AffinePidFootprint>(
+                     AffinePidFootprint{0, 0, 0});
   if (auto otherPid = dyn_cast<GetProgramIdOp>(definition)) {
     if (otherPid.getResult() == pid)
       return AffinePidFootprint{1, 0, 0};
-    if (auto extent = otherPid->getAttrOfType<IntegerAttr>(
-            kBridgeAxisExtentAttr))
-      return AffinePidFootprint{0, 0, extent.getInt() - 1};
-    return std::nullopt;
+    // This proof is conditional on one grouped target axis.  Every other
+    // scalar program ID is fixed while those virtual target-axis programs are
+    // traversed, so it is a common translation rather than a local interval.
+    // Multi-axis Bridge proves the same condition separately for each grouped
+    // axis while holding the remaining axes fixed.
+    return AffinePidFootprint{0, 0, 0};
+  }
+
+  // An unchanged loop result has exactly its preheader footprint.  A result
+  // with any recurrence is deliberately unavailable: inferring even a simple
+  // update here would silently turn this proof into a recurrence solver.
+  if (auto loop = dyn_cast<scf::ForOp>(definition)) {
+    auto result = dyn_cast<OpResult>(value);
+    if (!result || result.getResultNumber() >= loop.getInitArgs().size())
+      return std::nullopt;
+    unsigned index = result.getResultNumber();
+    Operation *terminator = loop.getBody()->getTerminator();
+    BlockArgument carried = loop.getRegionIterArgs()[index];
+    if (index >= terminator->getNumOperands() ||
+        terminator->getOperand(index) != carried)
+      return std::nullopt;
+    return integerFootprint(loop.getInitArgs()[index], pid, active);
   }
   StringRef name = definition->getName().getStringRef();
   if (name == "tt.splat" || name == "tt.broadcast" ||
@@ -604,6 +842,12 @@ integerFootprint(Value value, Value pid, llvm::SmallPtrSetImpl<Value> &active) {
       return rhs ? scaleFootprint(*rhs, *lhs) : std::nullopt;
     }
   }
+  // Bridge groups only one launch axis.  A remaining scalar expression that
+  // is independent of that axis is a common translation across the grouped
+  // virtual programs and cancels from pairwise disjointness.  Ranked local
+  // values are not zeroed: they may contain an unmodelled lane interval.
+  if (!valueDependsOn(value, pid) && !isa<ShapedType>(value.getType()))
+    return AffinePidFootprint{0, 0, 0};
   // Truncation, division, remainder, select, and nonlinear products can fold
   // different physical programs onto one address and are deliberately rejected.
   return std::nullopt;
@@ -1883,6 +2127,28 @@ LogicalResult materializeStateAxisNormalization(
   return success();
 }
 
+// A CallOp does not advertise generic memory effects.  It is nevertheless
+// prospectively safe for a local transformation when its symbol resolves and
+// the entire callee body is closed, memory-effect-free, and contains no
+// transitive call.  Keeping this proof one level deep makes the authority
+// explicit: nested call graphs require their own closure evidence rather than
+// silently inheriting purity from an unresolved descendant.
+bool isProspectivelyClosedPureCall(CallOp call) {
+  auto callee = dyn_cast_or_null<FuncOp>(call.resolveCallable());
+  if (!callee || callee.getBody().empty())
+    return false;
+  bool pure = true;
+  callee.walk([&](Operation *operation) {
+    if (!pure || operation == callee.getOperation() ||
+        operation->hasTrait<OpTrait::IsTerminator>())
+      return;
+    if (isa<CallOp, LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(operation) ||
+        !isMemoryEffectFree(operation))
+      pure = false;
+  });
+  return pure;
+}
+
 LoopDependenceCertificate certifyBridgeProgramIndependence(
     FuncOp entry, GetProgramIdOp pid) {
   SmallVector<LoadOp> loads;
@@ -1894,6 +2160,8 @@ LoopDependenceCertificate certifyBridgeProgramIndependence(
   std::string reason;
   bool rejectedEffect = false;
   entry.walk([&](Operation *op) {
+    if (rejectedEffect)
+      return;
     if (isa<AtomicRMWOp, AtomicCASOp>(op)) {
       rejectedEffect = true;
       reason = "atomic memory operation";
@@ -1911,20 +2179,31 @@ LoopDependenceCertificate certifyBridgeProgramIndependence(
       stores.push_back(store);
       return;
     }
-    if (exactPrefixLoops.contains(op) ||
+    // RecursiveMemoryEffects marks a structural container whose complete
+    // memory behavior is carried by the operations in its regions.  walk()
+    // continues into those regions after this callback, so accepting the
+    // container does not accept any leaf effect: volatile loads, stores,
+    // atomics, calls and unknown leaves are still certified below.
+    if (op->hasTrait<OpTrait::HasRecursiveMemoryEffects>() ||
+        exactPrefixLoops.contains(op) ||
         isa<FuncOp, ReturnOp, scf::IfOp, scf::YieldOp, ReduceOp,
             ReduceReturnOp>(op))
       return;
+    if (auto call = dyn_cast<CallOp>(op)) {
+      if (!isProspectivelyClosedPureCall(call)) {
+        rejectedEffect = true;
+        reason = "program call is not prospectively pure";
+      }
+      return;
+    }
     if (!isMemoryEffectFree(op)) {
       rejectedEffect = true;
-      reason = "unknown or unsupported side effect";
+      reason = (Twine("unclosed program effect: ") +
+                op->getName().getStringRef()).str();
     }
   });
   if (rejectedEffect)
     return {false, "", reason};
-  if (stores.empty())
-    return {false, "", "program has no pid-partitioned output store"};
-
   llvm::SmallPtrSet<Value, 8> loadRoots;
   llvm::SmallPtrSet<Value, 8> storeRoots;
   llvm::DenseMap<Value, AffinePidFootprint> storeRootFootprints;
@@ -2066,6 +2345,85 @@ std::optional<int64_t> exactStaticTripCount(scf::ForOp loop) {
   if (stride <= 0 || ub <= lb || (ub - lb) % stride != 0)
     return std::nullopt;
   return (ub - lb) / stride;
+}
+
+// Full unrolling itself preserves the source loop's dynamic order.  The
+// operation-neutral phase scheduler may subsequently choose another
+// topological order, but only from actual SSA dependencies and an exact
+// observable-effect chain.  Consequently the Provider need not demand a
+// load, store, reduction, combiner, dtype or workload shape.  It only needs a
+// nontrivial loop body whose carried-result boundary is structurally closed;
+// nested loops remain separately composed subjects.
+LoopDependenceCertificate
+certifyOperationNeutralFullUnrollReorder(scf::ForOp loop) {
+  auto trip = exactStaticTripCount(loop);
+  if (trip && *trip < 2)
+    return {false, "", "iteration domain has fewer than two iterations"};
+  auto yield = dyn_cast<scf::YieldOp>(loop.getBody()->getTerminator());
+  if (!yield || yield.getNumOperands() != loop.getInitArgs().size())
+    return {false, "", "loop-carried result arity is not closed"};
+  bool nonempty = false;
+  for (Operation &operation : loop.getBody()->without_terminator()) {
+    nonempty = true;
+    if (isa<scf::ForOp>(operation))
+      return {false, "", "nested scf.for requires a separately composed certificate"};
+  }
+  if (!nonempty)
+    return {false, "", "iteration body is empty"};
+  return {true, "existing_operation_neutral_topological_reorder_v1", ""};
+}
+
+bool isGenericExactPackableOperation(Operation *operation) {
+  return operation->getNumRegions() == 0 &&
+         operation->hasTrait<OpTrait::Elementwise>() &&
+         isMemoryEffectFree(operation) && isSpeculatable(operation) &&
+         operation->getNumOperands() > 0 && operation->getNumResults() > 0 &&
+         llvm::all_of(operation->getOperandTypes(),
+                      [](Type type) { return isa<RankedTensorType>(type); }) &&
+         llvm::all_of(operation->getResultTypes(),
+                      [](Type type) { return isa<RankedTensorType>(type); });
+}
+
+bool isExactPackableMemoryOperation(Operation *operation) {
+  if (auto load = dyn_cast<LoadOp>(operation))
+    return isa<RankedTensorType>(load.getPtr().getType()) &&
+           !load.getIsVolatile() && load.getBoundaryCheck().empty() &&
+           !load.getPadding();
+  if (auto store = dyn_cast<StoreOp>(operation))
+    return isa<RankedTensorType>(store.getPtr().getType()) &&
+           isa<RankedTensorType>(store.getValue().getType()) &&
+           store.getBoundaryCheck().empty();
+  return false;
+}
+
+// Certify that full unrolling exposes at least one corresponding operation
+// group with an exact generic packed form.  This is deliberately an operation
+// capability predicate, not an opcode allowlist: any regionless, pure,
+// speculatable Elementwise operation over ranked tensors qualifies.  A
+// candidate that feeds the loop yield is excluded because its copies may form
+// a cross-iteration recurrence rather than independent lanes.
+LoopDependenceCertificate
+certifyOperationNeutralExactPacking(scf::ForOp loop) {
+  LoopDependenceCertificate reorder =
+      certifyOperationNeutralFullUnrollReorder(loop);
+  if (!reorder.safe)
+    return reorder;
+  auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
+  for (Operation &operation : loop.getBody()->without_terminator()) {
+    if (!isGenericExactPackableOperation(&operation) &&
+        !isExactPackableMemoryOperation(&operation))
+      continue;
+    bool feedsCarriedState = llvm::any_of(
+        operation.getResults(), [&](Value result) {
+          return llvm::any_of(yield.getOperands(), [&](Value yielded) {
+            return valueDependsOn(yielded, result);
+          });
+        });
+    if (!feedsCarriedState)
+      return {true, "existing_operation_neutral_exact_packing_v2", ""};
+  }
+  return {false, "",
+          "iteration has no recurrence-independent exact-packable operation"};
 }
 
 bool hasExactIntegerReductionCombiner(ReduceOp reduce) {
@@ -2445,20 +2803,6 @@ LoopDependenceCertificate certifyOrderPreservingReadExposure(
 LoopDependenceCertificate certifyProviderClosedStaticNest(
     scf::ForOp root, SmallVectorImpl<scf::ForOp> &loops,
     SmallVectorImpl<scf::ForOp> &leaves) {
-  auto independent =
-      certifyIndependentIterationExactInnerReduction(root);
-  if (independent.safe) {
-    loops.push_back(root);
-    leaves.push_back(root);
-    return independent;
-  }
-  bool containsInnerReduction = false;
-  root.walk([&](ReduceOp) { containsInnerReduction = true; });
-  // A reduction-bearing iteration is governed by the stronger certificate
-  // above.  Falling through to the legacy pure-static-nest recognizer both
-  // loses the precise rejection cause and can never make its stores legal.
-  if (containsInnerReduction)
-    return independent;
   unsigned operationCount = 0;
   bool rejected = false;
   std::string reason;
@@ -2473,19 +2817,10 @@ LoopDependenceCertificate certifyProviderClosedStaticNest(
         return;
       }
       auto yield = dyn_cast<scf::YieldOp>(loop.getBody()->getTerminator());
-      if (!yield || yield.getNumOperands() != loop.getRegionIterArgs().size() ||
-          yield.getNumOperands() == 0) {
+      if (!yield || yield.getNumOperands() != loop.getRegionIterArgs().size()) {
         rejected = true;
-        reason = "a nest dimension has no closed loop-carried sink map";
+        reason = "a nest dimension has no closed yielded-result boundary";
         return;
-      }
-      for (auto [result, carried] :
-           llvm::zip(yield.getOperands(), loop.getRegionIterArgs())) {
-        if (!valueDependsOn(result, carried)) {
-          rejected = true;
-          reason = "a yielded value is not derived from its loop-carried state";
-          return;
-        }
       }
       bool nested = false;
       for (Operation &bodyOp : loop.getBody()->without_terminator())
@@ -2494,22 +2829,10 @@ LoopDependenceCertificate certifyProviderClosedStaticNest(
         leaves.push_back(loop);
       return;
     }
-    if (auto load = dyn_cast<LoadOp>(op)) {
-      if (load.getIsVolatile()) {
-        rejected = true;
-        reason = "volatile load cannot enter a phase-major static nest";
-      }
-      return;
-    }
-    if (isa<StoreOp>(op) || op->getName().getStringRef().starts_with("tt.atomic")) {
-      rejected = true;
-      reason = "static nest contains a write or atomic effect";
-      return;
-    }
-    if (!isa<scf::YieldOp>(op) && !isMemoryEffectFree(op)) {
-      rejected = true;
-      reason = "static nest contains an unclosed side effect";
-    }
+    // Full unrolling preserves source order.  The subsequent operation-neutral
+    // scheduler places every effectful or non-speculatable operation on one
+    // exact source-order barrier chain, so no load/store/atomic category gate
+    // belongs in this structural certificate.
   });
   // Semantic closure is independent of acquisition/code-growth policy.  The
   // predecision controller owns that policy and emits no candidate plan when
@@ -2531,75 +2854,28 @@ LoopDependenceCertificate certifyProviderClosedStaticNest(
   if (rejected || loops.empty() || leaves.empty())
     return {false, "", reason.empty() ? "static nest is empty" : reason};
 
-  for (scf::ForOp leaf : leaves) {
-    SmallVector<Value> carried;
-    for (scf::ForOp loop = leaf; loop; loop = loop->getParentOfType<scf::ForOp>())
-      llvm::append_range(carried, loop.getRegionIterArgs());
-    unsigned loads = 0;
-    leaf.walk([&](LoadOp load) {
-      ++loads;
-      if (dependsOnAny(load.getPtr(), carried) ||
-          (load.getMask() && dependsOnAny(load.getMask(), carried)) ||
-          (load.getOther() && dependsOnAny(load.getOther(), carried))) {
-        rejected = true;
-        reason = "load address, mask, or fill depends on loop-carried state";
-      }
-    });
-    if (loads == 0) {
-      rejected = true;
-      reason = "leaf dimension has no load service to expose";
-    }
-  }
   return rejected
              ? LoopDependenceCertificate{false, "", reason}
              : LoopDependenceCertificate{
-                   true, "provider_closed_complete_static_nest_v1", ""};
+                   true,
+                   "provider_closed_operation_neutral_static_nest_v2", ""};
 }
 
-LogicalResult tagProviderClosedLeaf(scf::ForOp leaf, StringRef roleSubject,
+LogicalResult tagProviderClosedNest(scf::ForOp root, StringRef roleSubject,
                                     Builder &builder) {
-  llvm::SmallPtrSet<Operation *, 32> loadPhase;
-  SmallVector<Operation *> worklist;
-  for (Operation &op : leaf.getBody()->without_terminator())
-    if (isa<LoadOp>(op))
-      worklist.push_back(&op);
-  while (!worklist.empty()) {
-    Operation *op = worklist.pop_back_val();
-    if (!loadPhase.insert(op).second)
-      continue;
-    for (Value operand : op->getOperands()) {
-      Operation *definition = operand.getDefiningOp();
-      if (definition && definition->getBlock() == op->getBlock()) {
-        if (!isMemoryEffectFree(definition) && !isa<LoadOp>(definition))
-          return failure();
-        worklist.push_back(definition);
-      }
-    }
-  }
-  bool sawReduce = false;
   auto roleSubjectAttr = builder.getStringAttr(roleSubject);
-  for (Operation &op : leaf.getBody()->without_terminator()) {
-    StringRef role;
-    if (loadPhase.contains(&op)) {
-      role = "load";
-    } else if (isa<StoreOp>(op)) {
-      role = "reduce";
-      sawReduce = true;
-    } else {
-      if (!isMemoryEffectFree(&op))
-        return failure();
-      bool carried = llvm::any_of(op.getResults(), [&](Value result) {
-        return dependsOnAny(result, leaf.getRegionIterArgs());
-      });
-      role = carried ? "reduce" : "compute";
-      sawReduce |= carried;
-    }
-    op.setAttr(kRoleAttr, builder.getStringAttr(role));
-    op.setAttr(kRoleSubjectAttr, roleSubjectAttr);
-  }
-  // A load can feed the loop-carried reduction directly.  That is a closed
-  // two-phase load/reduce DAG, not a missing compute template.
-  return success(!loadPhase.empty() && sawReduce);
+  int64_t ordinal = 0;
+  root.walk([&](Operation *operation) {
+    if (operation == root.getOperation() || isa<scf::ForOp, scf::YieldOp>(operation))
+      return;
+    operation->setAttr(kRoleAttr, builder.getStringAttr("compute"));
+    operation->setAttr(kRoleSubjectAttr, roleSubjectAttr);
+    operation->setAttr(
+        kOperationGroupRefAttr,
+        builder.getStringAttr(
+            (Twine(roleSubject) + ":op:" + Twine(ordinal++)).str()));
+  });
+  return success(ordinal > 0);
 }
 
 bool exactKeys(const llvm::json::Object &object, ArrayRef<StringRef> keys) {
@@ -2645,7 +2921,9 @@ bool validateCommonContract(const llvm::json::Object &contract,
       "l.subject.structure",
       "l.effects_dependencies",  "l.parameters.closed",
       "l.route.mutual_exclusion", lineageGuard,
-      "l.route.postcondition",    "l.ir.verify",
+      route == kBridgeOnlyRoute ? "l.bridge.postcondition"
+                                : "l.route.postcondition",
+      "l.ir.verify",
       "l.observation.correspondence"};
   for (auto [index, value] : llvm::enumerate(*guards)) {
     const auto *guard = value.getAsObject();
@@ -2658,9 +2936,21 @@ bool validateCommonContract(const llvm::json::Object &contract,
         !guard->getString("verifier_or_legality_binding"))
       return false;
   }
-  SmallVector<StringRef> expectedFeedback = {
-      "loop.route.realized", "loop.route.parameters",
-      "loop.route.postcondition", "codegen.instruction_family_counts"};
+  SmallVector<StringRef> expectedFeedback =
+      route == kBridgeOnlyRoute
+          ? SmallVector<StringRef>{
+                "loop.bridge.realized", "loop.bridge.parameters",
+                "loop.bridge.postcondition",
+                "codegen.instruction_family_counts"}
+      : lineageGuard == "l.pipeline.member_lineage"
+          ? SmallVector<StringRef>{
+                "loop.route.realized", "loop.route.parameters",
+                "loop.pipeline.member_artifact_lineage",
+                "loop.route.postcondition"}
+          : SmallVector<StringRef>{
+                "loop.route.realized", "loop.route.parameters",
+                "loop.route.postcondition",
+                "codegen.instruction_family_counts"};
   for (auto [index, value] : llvm::enumerate(*feedback)) {
     const auto *field = value.getAsObject();
     if (!field ||
@@ -2672,7 +2962,7 @@ bool validateCommonContract(const llvm::json::Object &contract,
         !field->getString("evidence_sink") || !field->getString("source_kind"))
       return false;
   }
-  return route == kPipelineRoute || route == kPhaseRoute ||
+  return route == kBridgeOnlyRoute || route == kPipelineRoute || route == kPhaseRoute ||
          route == kLogicalRoute || route == kExactPrefixRoute;
 }
 
@@ -2751,12 +3041,17 @@ FailureOr<ParsedLoopPlan> parseLoopPlan(StringRef payload,
   auto bridgeFactor = parameters->getInteger("bridge_factor");
   auto routeFactor = parameters->getInteger("route_factor");
   auto compositionSchema = parameters->getString("composition_schema");
+  bool bridgeOnly = *route == kBridgeOnlyRoute && adapterVersion == 1;
   bool compositionV2 =
       (*route == kPipelineRoute && adapterVersion == 7) ||
-      (*route == kPhaseRoute && adapterVersion == 9) ||
-      (*route == kLogicalRoute && adapterVersion == 7);
+      (*route == kPhaseRoute &&
+       (adapterVersion == 9 || adapterVersion == 11) &&
+       compositionSchema &&
+       *compositionSchema == "hbv.loop.bridge-route-composition.v2") ||
+      (*route == kLogicalRoute && adapterVersion == 8);
   bool compositionV3 =
-      *route == kPhaseRoute && adapterVersion == 10 &&
+      *route == kPhaseRoute &&
+      (adapterVersion == 10 || adapterVersion == 12) &&
       compositionSchema &&
       *compositionSchema == "hbv.loop.bridge-route-composition.v3";
   bool bridgeAxisVector =
@@ -2771,7 +3066,8 @@ FailureOr<ParsedLoopPlan> parseLoopPlan(StringRef payload,
       *route == kLogicalRoute && adapterVersion == 2;
   bool bridgeStaticPartition =
       *route == kPhaseRoute &&
-      (adapterVersion == 3 || adapterVersion == 8 || adapterVersion == 9) &&
+      (adapterVersion == 3 || adapterVersion == 8 || adapterVersion == 9 ||
+       adapterVersion == 11) &&
       parameters->getString("subject_policy") ==
           "static_consecutive_virtual_program_partition_recurrence";
   bool legacyBridgeConstructed =
@@ -2781,7 +3077,7 @@ FailureOr<ParsedLoopPlan> parseLoopPlan(StringRef payload,
        (adapterVersion == 3 || adapterVersion == 4 || adapterVersion == 5)) ||
       bridgeStaticPartition;
   bool bridgeConstructed =
-      legacyBridgeConstructed ||
+      bridgeOnly || legacyBridgeConstructed ||
       (composedIntervention && bridgeFactor && *bridgeFactor > 1);
   bool multiSubject =
       (*route == kPhaseRoute || *route == kLogicalRoute) &&
@@ -2791,15 +3087,23 @@ FailureOr<ParsedLoopPlan> parseLoopPlan(StringRef payload,
       (*route == kPhaseRoute || *route == kLogicalRoute) &&
       parameters->getString("subject_policy") ==
           "provider_closed_nested_inner_dimension_scf_for";
+  bool providerBoundPipelineSubjectSet =
+      *route == kPipelineRoute && *adapterVersion == 13 &&
+      parameters->getString("subject_policy") ==
+          "provider_bound_independent_existing_scf_for_set";
   bool providerBoundSubjectSet =
-      (*route == kPhaseRoute || *route == kLogicalRoute) &&
-      *adapterVersion == 11 &&
+      providerBoundPipelineSubjectSet ||
+      ((*route == kPhaseRoute || *route == kLogicalRoute) &&
+      ((*route == kPhaseRoute && *adapterVersion == 11) ||
+       (*route == kLogicalRoute && *adapterVersion == 12)) &&
       (parameters->getString("subject_policy") ==
            "provider_bound_independent_existing_scf_for_set" ||
        parameters->getString("subject_policy") ==
-           "provider_bound_nested_inner_dimension_scf_for");
+           "provider_bound_focal_existing_scf_for" ||
+       parameters->getString("subject_policy") ==
+           "provider_bound_nested_inner_dimension_scf_for"));
   bool providerClosedStatic =
-      *route == kPhaseRoute && *adapterVersion == 4 &&
+      *route == kPhaseRoute && *adapterVersion == 5 &&
       parameters->getString("subject_policy") ==
           "provider_closed_complete_static_scf_for_nest";
   bool exactPrefixReduction =
@@ -2821,11 +3125,14 @@ FailureOr<ParsedLoopPlan> parseLoopPlan(StringRef payload,
        (*adapterVersion == 2 || *adapterVersion == 6)) ||
       (*route == kPhaseRoute &&
        (*adapterVersion == 1 || *adapterVersion == 2 ||
-        *adapterVersion == 3 || *adapterVersion == 8)) ||
+        *adapterVersion == 3 || *adapterVersion == 4 ||
+        *adapterVersion == 8 ||
+        *adapterVersion == 9 || *adapterVersion == 10)) ||
       (*route == kLogicalRoute &&
        (*adapterVersion == 1 || *adapterVersion == 2 ||
         *adapterVersion == 3 || *adapterVersion == 4 ||
-        *adapterVersion == 5 || *adapterVersion == 6));
+        *adapterVersion == 5 || *adapterVersion == 6 ||
+        *adapterVersion == 7 || *adapterVersion == 11));
   if (historicalOnlyAdapter) {
     reason =
         "historical Loop adapter is evidence-readable but not production-executable";
@@ -2934,11 +3241,29 @@ FailureOr<ParsedLoopPlan> parseLoopPlan(StringRef payload,
     auto policy = parameters->getString("subject_policy");
     bool nested = policy ==
         "provider_bound_nested_inner_dimension_scf_for";
+    bool focal = policy ==
+        "provider_bound_focal_existing_scf_for";
+    StringRef expectedProviderSchema =
+        providerBoundPipelineSubjectSet
+            ? "hbv.loop-provider.bound-pipeline-subject-set.v1"
+        : *route == kLogicalRoute
+            ? "hbv.loop-provider.bound-logical-subject-set.v2"
+            : "hbv.loop-provider.bound-subject-set.v1";
+    auto sharedStageCount = parameters->getInteger("shared_stage_count");
     if (!members || members->empty() || !providerRef ||
         providerRef->empty() ||
-        providerSchema != "hbv.loop-provider.bound-subject-set.v1" ||
+        providerSchema != expectedProviderSchema ||
+        (providerBoundPipelineSubjectSet &&
+         (parameters->getString("stage_scope") !=
+              "whole_kernel_shared_option" ||
+          !sharedStageCount || *sharedStageCount < 2 ||
+          members->size() < 2)) ||
+        (*route == kLogicalRoute &&
+         parameters->getString("packing_policy") !=
+             "registered_exact_operation_capability") ||
         (nested && members->size() != 1) ||
-        (!nested && members->size() < 2)) {
+        (focal && members->size() != 1) ||
+        (!nested && !focal && members->size() < 2)) {
       reason = "provider-bound Loop subject set envelope is malformed";
       return failure();
     }
@@ -2990,10 +3315,16 @@ FailureOr<ParsedLoopPlan> parseLoopPlan(StringRef payload,
           !capability || capability->empty() || !factorAdmission ||
           factorAdmission->empty() || !runtime || !parent ||
           !nestedCertificate || !factor || *factor < 2 ||
-          !llvm::isPowerOf2_64(*factor) || !nestingDepth ||
+          (!providerBoundPipelineSubjectSet &&
+           !llvm::isPowerOf2_64(*factor)) || !nestingDepth ||
           *nestingDepth < 0 || exact == runtimeSubject ||
-          (exact && *factor > *exactTrip) ||
-          factorKind != (*route == kPhaseRoute
+          (!providerBoundPipelineSubjectSet &&
+           exact && *factor > *exactTrip) ||
+          (providerBoundPipelineSubjectSet &&
+           (!sharedStageCount || *factor != *sharedStageCount)) ||
+          factorKind != (providerBoundPipelineSubjectSet
+                              ? "pipeline_stage_count"
+                          : *route == kPhaseRoute
                               ? "phase_reorder_grouping_width"
                               : "logical_vector_grouping_width") ||
           member->getString("schema") !=
@@ -3046,23 +3377,50 @@ FailureOr<ParsedLoopPlan> parseLoopPlan(StringRef payload,
               ? "l.subject.state_axis_sibling_group"
           : affineRuntimePartial
               ? "l.subject.affine_runtime_grid_stride"
+          : providerBoundPipelineSubjectSet
+              ? "l.subject.provider_bound_pipeline_set"
           : providerBoundSubjectSet
               ? (parameters->getString("subject_policy") ==
                          "provider_bound_nested_inner_dimension_scf_for"
                      ? "l.subject.provider_bound_nested_inner"
+                 : parameters->getString("subject_policy") ==
+                           "provider_bound_focal_existing_scf_for"
+                     ? "l.subject.provider_bound_focal"
                      : "l.subject.provider_bound_independent_set")
           : nestedSubject
               ? "l.subject.provider_closed_nested_dimension"
           : multiSubject ? "l.subject.independent_fresh_set"
                          : "l.subject.unique_fresh",
-          stateAxisLogical ? "l.state_axis.lineage"
-                           : "l.unroll.lineage")) {
+          bridgeOnly ? "l.bridge.lineage"
+          : stateAxisLogical ? "l.state_axis.lineage"
+          : providerBoundPipelineSubjectSet
+              ? "l.pipeline.member_lineage"
+              : "l.unroll.lineage")) {
     reason = "selected Loop guards, feedback, fallback, or provenance are invalid";
     return failure();
   }
   bool routeClosed = false;
-  if (*route == kPipelineRoute) {
-    if (composedIntervention) {
+  if (bridgeOnly) {
+    routeClosed =
+        exactKeys(*parameters,
+                  {"adapter_version", "bridge_factor",
+                   "construction_policy", "kind", "subject_policy",
+                   "subject_ref"}) &&
+        bridgeFactor && *bridgeFactor >= 2 &&
+        llvm::isPowerOf2_64(*bridgeFactor) && *bridgeFactor <= 16 &&
+        parameters->getString("construction_policy") ==
+            "program_id_grouping_disjoint_virtual_programs" &&
+        bindings && bindings->size() == 1;
+  } else if (*route == kPipelineRoute) {
+    if (providerBoundPipelineSubjectSet) {
+      routeClosed =
+          exactKeys(*parameters,
+                    {"adapter_version", "kind", "members", "provider_ref",
+                     "provider_schema", "shared_stage_count", "stage_scope",
+                     "subject_policy", "subject_ref"}) &&
+          parameters->getInteger("shared_stage_count") > 1 && bindings &&
+          bindings->size() == providerBoundMembers.size() + 1;
+    } else if (composedIntervention) {
       bool parameterKeysClosed = compositionV2
           ? exactKeys(*parameters,
                       {"adapter_version", "bridge_factor",
@@ -3161,7 +3519,10 @@ FailureOr<ParsedLoopPlan> parseLoopPlan(StringRef payload,
                          : ((bridgeConstructed &&
                              *routeFactor == *bridgeFactor) ||
                             (!bridgeConstructed && *routeFactor >= 2))) &&
-          parameters->getString("phase_order") == "load_compute_store" &&
+          parameters->getString("phase_order") ==
+              ((*adapterVersion == 11 || *adapterVersion == 12)
+                   ? "source_operation_group_major"
+                   : "load_compute_store") &&
           parameters->getString("reduction_order") ==
               "operator_preserving" &&
           parameters->getString("tail_policy") ==
@@ -3218,11 +3579,11 @@ FailureOr<ParsedLoopPlan> parseLoopPlan(StringRef payload,
                       return factor && *factor >= 2;
                     }) &&
                     parameters->getString("provider_schema") ==
-                        "hbv.loop-provider.static-scf.v2" &&
+                        "hbv.loop-provider.static-scf.v3" &&
                     parameters->getString("phase_order") ==
-                        "load_compute_reduce" &&
+                        "source_operation_group_major" &&
                     parameters->getString("reduction_order") ==
-                        "dependency_preserving" &&
+                        "exact_def_use_and_effect_chain" &&
                     parameters->getString("tail_policy") ==
                         "exact_static_domain" &&
                     bindings && bindings->size() == 2;
@@ -3369,23 +3730,48 @@ FailureOr<ParsedLoopPlan> parseLoopPlan(StringRef payload,
         result.stateAxisGroupCount = result.stateAxisGroups.size();
       }
     } else if (providerBoundSubjectSet) {
-      routeClosed =
-          exactKeys(*parameters,
-                    {"adapter_version", "kind", "members", "provider_ref",
-                     "provider_schema", "subject_policy", "subject_ref"}) &&
+      bool parameterKeysClosed =
+          *route == kLogicalRoute
+              ? exactKeys(*parameters,
+                          {"adapter_version", "kind", "members",
+                           "packing_policy", "provider_ref",
+                           "provider_schema", "subject_policy",
+                           "subject_ref"})
+              : exactKeys(*parameters,
+                          {"adapter_version", "kind", "members",
+                           "provider_ref", "provider_schema",
+                           "subject_policy", "subject_ref"});
+      routeClosed = parameterKeysClosed &&
           bindings &&
           bindings->size() == providerBoundMembers.size() * 2;
     } else if (composedIntervention) {
+      bool operationNeutralPacking =
+          compositionV2 && *adapterVersion == 8;
       bool parameterKeysClosed = compositionV2
-          ? exactKeys(*parameters,
-                      {"adapter_version", "bridge_factor", "combiner",
-                       "composition_schema", "exact_split_elision",
-                       "factor_admission_ref", "invariant_hoisting",
-                       "iteration_axis", "kind", "mask_tail_policy",
-                       "route_factor", "route_factor_kind",
-                       "route_subject_exact_trip_count", "route_subject_ref",
-                       "runtime_main_tail_certificate_ref", "subject_policy",
-                       "subject_ref", "tensor_lane_fusion"})
+          ? (operationNeutralPacking
+                 ? exactKeys(*parameters,
+                             {"adapter_version", "bridge_factor", "combiner",
+                              "composition_schema", "exact_split_elision",
+                              "factor_admission_ref", "invariant_hoisting",
+                              "iteration_axis", "kind", "mask_tail_policy",
+                              "packing_policy", "route_factor",
+                              "route_factor_kind",
+                              "route_subject_exact_trip_count",
+                              "route_subject_ref",
+                              "runtime_main_tail_certificate_ref",
+                              "subject_policy", "subject_ref",
+                              "tensor_lane_fusion"})
+                 : exactKeys(*parameters,
+                             {"adapter_version", "bridge_factor", "combiner",
+                              "composition_schema", "exact_split_elision",
+                              "factor_admission_ref", "invariant_hoisting",
+                              "iteration_axis", "kind", "mask_tail_policy",
+                              "route_factor", "route_factor_kind",
+                              "route_subject_exact_trip_count",
+                              "route_subject_ref",
+                              "runtime_main_tail_certificate_ref",
+                              "subject_policy", "subject_ref",
+                              "tensor_lane_fusion"}))
           : exactKeys(*parameters,
                       {"adapter_version", "bridge_factor", "combiner",
                        "composition_schema", "exact_split_elision",
@@ -3411,6 +3797,9 @@ FailureOr<ParsedLoopPlan> parseLoopPlan(StringRef payload,
           parameters->getBoolean("invariant_hoisting").has_value() &&
           parameters->getBoolean("tensor_lane_fusion").has_value() &&
           parameters->getBoolean("exact_split_elision").has_value() &&
+          (!operationNeutralPacking ||
+           parameters->getString("packing_policy") ==
+               "registered_exact_operation_capability") &&
           (!*parameters->getBoolean("exact_split_elision") ||
            *parameters->getBoolean("tensor_lane_fusion")) &&
           bindings && bindings->size() == 3;
@@ -3537,6 +3926,7 @@ FailureOr<ParsedLoopPlan> parseLoopPlan(StringRef payload,
            "provider_bound_nested_inner_dimension_scf_for");
   result.runtimeGuardedLogical = runtimeGuardedLogical;
   result.bridgeConstructed = bridgeConstructed;
+  result.bridgeOnly = bridgeOnly;
   result.bridgeStaticPartition = bridgeStaticPartition;
   result.composedIntervention = composedIntervention;
   result.compositionV2 = compositionV2;
@@ -3580,6 +3970,8 @@ FailureOr<ParsedLoopPlan> parseLoopPlan(StringRef payload,
           : adapterVersion != 5 ||
                 parameters->getBoolean("exact_split_elision").value_or(false);
   result.providerBoundSubjectSet = providerBoundSubjectSet;
+  result.providerBoundPipelineSubjectSet =
+      providerBoundPipelineSubjectSet;
   result.providerBoundMembers = std::move(providerBoundMembers);
   result.providerBoundMemberSignature = providerBoundMemberSignature;
   if (affineRuntimePartial && *adapterVersion == 7)
@@ -3591,18 +3983,22 @@ FailureOr<ParsedLoopPlan> parseLoopPlan(StringRef payload,
                            : bridgeConstructed ? *bridgeFactor : 1;
   result.routeFactor =
       stateAxisLogical ? 1
+      : bridgeOnly ? 1
       : composedIntervention ? *routeFactor
                            : bridgeConstructed ? *bridgeFactor : 1;
   result.unrollFactor = affineRuntimePartial
                             ? *parameters->getInteger("unroll_factor")
                         : stateAxisLogical ? 1
+                        : bridgeOnly ? 1
                         : composedIntervention ? result.routeFactor
                         : bridgeConstructed    ? *bridgeFactor
                                                : 1;
   if (*route == kPipelineRoute)
-    result.stageCount = composedIntervention
-                            ? result.routeFactor
-                            : *parameters->getInteger("stage_count");
+    result.stageCount = providerBoundPipelineSubjectSet
+                            ? *parameters->getInteger("shared_stage_count")
+                        : composedIntervention ? result.routeFactor
+                                               : *parameters->getInteger(
+                                                     "stage_count");
   if (providerClosedStatic)
     for (const llvm::json::Value &value :
          *parameters->getArray("unroll_factors"))
@@ -4207,6 +4603,31 @@ bool isEligibleLoop(scf::ForOp loop, SmallVectorImpl<Operation *> &loadSlice,
                     Operation *&compute, Operation *&reduce,
                     bool requireStaticTripCount = true);
 
+bool hasNativeVisibleAsyncLoadService(scf::ForOp loop) {
+  for (Operation &operation : loop.getBody()->without_terminator()) {
+    if (isa<DescriptorLoadOp, DescriptorGatherOp>(operation))
+      return true;
+    auto load = dyn_cast<LoadOp>(operation);
+    if (!load)
+      continue;
+    Value pointer = load.getPtr();
+    Type pointee;
+    int64_t lanes = 1;
+    if (auto tensor = dyn_cast<RankedTensorType>(pointer.getType())) {
+      pointee = cast<PointerType>(tensor.getElementType()).getPointeeType();
+      lanes = tensor.getNumElements();
+    } else
+      pointee = cast<PointerType>(pointer.getType()).getPointeeType();
+    // cp.async has no sub-four-byte transfer.  At TTIR the final distributed
+    // encoding and contiguity do not yet exist, so prove only the source
+    // payload-width lower bound here.  Native AxisInfo/shared-layout lowering
+    // and final artifact attestation retain the stronger copy-vector proof.
+    if (lanes * pointee.getIntOrFloatBitWidth() >= 32)
+      return true;
+  }
+  return false;
+}
+
 bool isNativePipelineScopeProxy(scf::ForOp loop, int64_t defaultNumStages,
                                 int64_t &effectiveNumStages) {
   // Source-backed TTIR proxy for the native TTGIR pipeline scope.  Explicit
@@ -4215,14 +4636,15 @@ bool isNativePipelineScopeProxy(scf::ForOp loop, int64_t defaultNumStages,
   // excluded by the native precondition, so reject a loop containing another
   // scf.for here as the conservative TTIR equivalent.
   bool hasNestedLoop = false;
-  bool hasLoad = false;
+  bool hasLoad = hasNativeVisibleAsyncLoadService(loop);
   bool hasDot = false;
   loop.walk([&](Operation *op) {
     if (op != loop.getOperation() && isa<scf::ForOp>(op))
       hasNestedLoop = true;
-    hasLoad |= isa<LoadOp, DescriptorLoadOp, DescriptorGatherOp>(op);
-    hasDot |= isa<DotOpInterface>(op);
   });
+  for (Operation &operation : loop.getBody()->without_terminator()) {
+    hasDot |= isa<DotOpInterface>(operation);
+  }
   // Match loopHasDistGreaterThanOne from the native pipeliner at TTIR: a
   // yielded value with no defining op is a loop-carried distance that the
   // pipeline expander does not currently support.
@@ -4245,16 +4667,19 @@ bool isNativePipelineScopeProxy(scf::ForOp loop, int64_t defaultNumStages,
 LoopDependenceCertificate certifyNativeDynamicPipelineSubject(
     scf::ForOp loop) {
   bool hasNestedLoop = false;
-  bool hasLoad = false;
+  bool hasTopLevelLoad = hasNativeVisibleAsyncLoadService(loop);
   loop.walk([&](Operation *operation) {
     if (operation != loop.getOperation() && isa<scf::ForOp>(operation))
       hasNestedLoop = true;
-    hasLoad |= isa<LoadOp, DescriptorLoadOp, DescriptorGatherOp>(operation);
   });
+  // AssignLoadLatencies schedules only a sufficiently wide service rooted
+  // directly in the loop body.  A nested or sub-four-byte load is not a
+  // native-visible async root merely because a recursive walk observes it.
   if (hasNestedLoop)
     return {false, "", "nested_loop_requires_independent_pipeline_subject"};
-  if (!hasLoad)
-    return {false, "", "pipeline_subject_has_no_load_service"};
+  if (!hasTopLevelLoad)
+    return {false, "",
+            "pipeline_subject_has_no_native_visible_async_load_service"};
   bool hasUnsupportedDistance = llvm::any_of(
       loop.getBody()->getTerminator()->getOperands(),
       [](Value operand) { return !operand.getDefiningOp(); });
@@ -4422,23 +4847,6 @@ certifyAffineRuntimeProgramPartitionOrderPreserving(scf::ForOp loop) {
   SmallVector<Value> loadRoots;
   llvm::DenseMap<Value, unsigned> storesPerRoot;
   LoopDependenceCertificate failure{true, "", ""};
-  auto isClosedPureCall = [](CallOp call) {
-    auto callee = dyn_cast_or_null<FuncOp>(call.resolveCallable());
-    if (!callee || callee.getBody().empty())
-      return false;
-    bool pure = true;
-    callee.walk([&](Operation *operation) {
-      if (!pure || operation == callee.getOperation() ||
-          operation->hasTrait<OpTrait::IsTerminator>())
-        return;
-      // Calls hidden behind another callable need their own prospective
-      // closure rather than inheriting this one transitively.
-      if (isa<CallOp, LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(operation) ||
-          !isMemoryEffectFree(operation))
-        pure = false;
-    });
-    return pure;
-  };
   loop.walk([&](Operation *operation) {
     if (!failure.safe || operation == loop.getOperation() ||
         operation->hasTrait<OpTrait::IsTerminator>())
@@ -4480,7 +4888,7 @@ certifyAffineRuntimeProgramPartitionOrderPreserving(scf::ForOp loop) {
       return;
     }
     if (auto call = dyn_cast<CallOp>(operation)) {
-      if (!isClosedPureCall(call))
+      if (!isProspectivelyClosedPureCall(call))
         failure = {false, "", "body_call_is_not_prospectively_pure"};
       return;
     }
@@ -4535,7 +4943,19 @@ bool isExistingUnrollOrderCertificate(StringRef certificate) {
          certificate ==
              "per_loop_order_preserving_read_exposure_v1" ||
          certificate ==
-             "per_loop_order_preserving_load_vectorization_v1";
+             "per_loop_order_preserving_load_vectorization_v1" ||
+         certificate ==
+             "existing_operation_neutral_exact_packing_v1" ||
+         certificate ==
+             "existing_operation_neutral_exact_packing_v2" ||
+         certificate ==
+             "per_loop_exact_operation_vectorization_v2" ||
+         certificate ==
+             "per_loop_exact_operation_vectorization_v3" ||
+         certificate ==
+             "existing_operation_neutral_topological_reorder_v1" ||
+         certificate ==
+             "per_loop_operation_neutral_topological_reorder_v1";
 }
 
 // Canonical capability composition consumed above the compiler ABI.  The
@@ -4836,11 +5256,13 @@ public:
     (*entry).walk([&](Operation *operation) {
       if (auto load = dyn_cast<LoadOp>(operation)) {
         if (auto fact = runtimeMaskScalarFromMask(
-                load.getMask(), *entry, false))
+                load.getMask(), *entry, false);
+            fact && fact->complete)
           runtimeMaskScalars.push_back(*fact);
       } else if (auto store = dyn_cast<StoreOp>(operation)) {
         if (auto fact = runtimeMaskScalarFromMask(
-                store.getMask(), *entry, true))
+                store.getMask(), *entry, true);
+            fact && fact->complete)
           runtimeMaskScalars.push_back(*fact);
       }
     });
@@ -5138,6 +5560,9 @@ public:
               loop, generalLoads, generalComputes, generalState,
               /*requireVectorizableTensorLoad=*/false);
         }
+        if (!reorderCapability.safe)
+          reorderCapability =
+              certifyOperationNeutralFullUnrollReorder(loop);
         bool exactPrefixVectorization =
             static_cast<bool>(matchExactPrefixReduction(loop));
         bool logicalGroupVectorization =
@@ -5145,22 +5570,29 @@ public:
             censusCompute->getNumResults() == 1 &&
             isRankOneIntegerVector(censusCompute->getResult(0));
         LoopDependenceCertificate loadVectorizationCapability;
+        LoopDependenceCertificate operationPackingCapability;
         if (!exactPrefixVectorization && !logicalGroupVectorization) {
           SmallVector<Operation *> vectorLoads, vectorComputes, vectorState;
           loadVectorizationCapability = certifyOrderPreservingReadExposure(
               loop, vectorLoads, vectorComputes, vectorState,
               /*requireVectorizableTensorLoad=*/true);
+          if (!loadVectorizationCapability.safe)
+            operationPackingCapability =
+                certifyOperationNeutralExactPacking(loop);
         }
         bool vectorizationCapability =
             exactPrefixVectorization || logicalGroupVectorization ||
-            loadVectorizationCapability.safe;
+            loadVectorizationCapability.safe ||
+            operationPackingCapability.safe;
         std::string reorderReason = reorderCapability.safe
             ? ""
             : reorderCapability.reason;
         std::string vectorizationReason = vectorizationCapability
             ? ""
             : loadVectorizationCapability.reason.empty()
-                  ? reorderReason
+                  ? operationPackingCapability.reason.empty()
+                        ? reorderReason
+                        : operationPackingCapability.reason
                   : loadVectorizationCapability.reason;
         llvm::json::Object census;
         census["locator"] = planningCutLoopLocators.lookup(
@@ -5203,6 +5635,10 @@ public:
             pipelineCapability.kind;
         census["native_pipeline_capability_reason"] =
             pipelineCapability.reason;
+        auto existingPipelineStages =
+            loop->getAttrOfType<IntegerAttr>("tt.num_stages");
+        census["preexisting_pipeline_stage_count"] =
+            existingPipelineStages ? existingPipelineStages.getInt() : 0;
         census["full_unroll_reorder_capable"] =
             reorderCapability.safe;
         census["full_unroll_reorder_capability_certificate"] =
@@ -5217,7 +5653,9 @@ public:
                        ? "existing_rank1_integer_exact_grouping_v2"
                        : loadVectorizationCapability.safe
                              ? loadVectorizationCapability.kind
-                             : "");
+                             : operationPackingCapability.safe
+                                   ? operationPackingCapability.kind
+                                   : "");
         census["full_unroll_vectorization_capability_reason"] =
             vectorizationReason;
         LoopDependenceCertificate nestedCapability =
@@ -5427,10 +5865,12 @@ public:
       specialFunctionSignature[name] = count;
     facts["body_special_function_counts"] =
         std::move(specialFunctionSignature);
-    bool tensorLaneFusionEligible = false;
+    bool exactGroupedLoadEligible = false;
+    bool exactGroupedStoreEligible = false;
+    int64_t exactElementwiseOperationPackableCount = 0;
     int64_t exactGroupedValueRoundTripCount = 0;
     (*entry).walk([&](LoadOp load) {
-      tensorLaneFusionEligible |=
+      exactGroupedLoadEligible |=
           isa<RankedTensorType>(load.getPtr().getType()) &&
           load.getBoundaryCheck().empty() && !load.getPadding();
       // This is the exact pre-materialization counterpart of the
@@ -5450,7 +5890,31 @@ public:
           store.getBoundaryCheck().empty())
         ++exactGroupedValueRoundTripCount;
     });
+    (*entry).walk([&](StoreOp store) {
+      exactGroupedStoreEligible |=
+          isa<RankedTensorType>(store.getPtr().getType()) &&
+          store.getBoundaryCheck().empty();
+    });
+    (*entry).walk([&](Operation *operation) {
+      exactElementwiseOperationPackableCount +=
+          isGenericExactPackableOperation(operation);
+    });
+    bool logicalExactOperationPackingEligible =
+        exactGroupedLoadEligible || exactGroupedStoreEligible ||
+        exactElementwiseOperationPackableCount > 0;
+    // Historical field retained as a compatibility projection.  Its current
+    // authority is the operation-capability union above, not load presence.
+    bool tensorLaneFusionEligible =
+        logicalExactOperationPackingEligible;
     facts["tensor_lane_fusion_eligible"] = tensorLaneFusionEligible;
+    facts["logical_exact_operation_packing_eligible"] =
+        logicalExactOperationPackingEligible;
+    facts["exact_grouped_load_adapter_eligible"] =
+        exactGroupedLoadEligible;
+    facts["exact_grouped_store_adapter_eligible"] =
+        exactGroupedStoreEligible;
+    facts["exact_elementwise_operation_packable_count"] =
+        exactElementwiseOperationPackableCount;
     facts["exact_grouped_value_round_trip_count"] =
         exactGroupedValueRoundTripCount;
     llvm::json::Array dependencyOperationCounts;
@@ -6011,6 +6475,9 @@ public:
             builder, loc, physicalPid, factorValue));
       }
       int64_t operationOrdinal = 0;
+      llvm::DenseMap<Operation *, int64_t> sourceGroupOrdinals;
+      for (auto [sourceOrdinal, operation] : llvm::enumerate(bodyOps))
+        sourceGroupOrdinals[operation] = sourceOrdinal;
       for (int64_t ordinal = 0; ordinal < groupedProgramCount; ++ordinal) {
         int64_t remainder = ordinal;
         IRMapping mapping;
@@ -6037,6 +6504,12 @@ public:
                       : isa<StoreOp>(cloned) ? "store" : "compute"));
           cloned->setAttr(kBridgeOrdinalAttr,
                           builder.getI32IntegerAttr(operationOrdinal++));
+          cloned->setAttr(
+              kBridgeGroupRefAttr,
+              builder.getStringAttr(
+                  (Twine("body:") +
+                   Twine(sourceGroupOrdinals.lookup(operation)))
+                      .str()));
         }
       }
       for (Operation *operation : llvm::reverse(bodyOps))
@@ -6360,6 +6833,12 @@ public:
       Value quotientStep = arith::SelectOp::create(
           builder, loc, extentPositive, one, negativeOne);
       int64_t ordinal = 0;
+      llvm::DenseMap<Operation *, int64_t> sourceGroupOrdinals;
+      int64_t nextSourceGroupOrdinal = 0;
+      for (Operation *operation : bodyOps)
+        if (operation != directPartition->quotient.getOperation() &&
+            operation != directPartition->remainder.getOperation())
+          sourceGroupOrdinals[operation] = nextSourceGroupOrdinal++;
       for (int64_t cloneIndex = 0; cloneIndex < factor; ++cloneIndex) {
         Value virtualPid = basePid;
         if (cloneIndex != 0) {
@@ -6385,6 +6864,12 @@ public:
                       : isa<StoreOp>(cloned) ? "store" : "compute"));
           cloned->setAttr(kBridgeOrdinalAttr,
                           builder.getI32IntegerAttr(ordinal++));
+          cloned->setAttr(
+              kBridgeGroupRefAttr,
+              builder.getStringAttr(
+                  (Twine("body:") +
+                   Twine(sourceGroupOrdinals.lookup(op)))
+                      .str()));
         }
         if (cloneIndex + 1 == factor)
           continue;
@@ -6924,13 +7409,53 @@ public:
         return signalPassFailure();
       }
       scf::ForOp loop = bridgeLoops.front();
-      loop->setAttr(kSubjectAttr, subjectLocator(module.getContext(), *parsed));
+      if (parsed->route != kPipelineRoute)
+        loop->setAttr(kSubjectAttr,
+                      subjectLocator(module.getContext(), *parsed));
       (*entry)->setAttr(kRouteAttr, builder.getStringAttr(parsed->route));
       (*entry)->setAttr(kSubjectRefAttr,
                         builder.getStringAttr(parsed->subjectRef));
-      if (parsed->route == kPipelineRoute) {
-        loop->setAttr("tt.num_stages",
-                      builder.getI32IntegerAttr(parsed->stageCount));
+      if (parsed->bridgeOnly) {
+        // B is the post-Bridge/pre-route intervention.  Do not attach any
+        // route-local stage, unroll, phase, or vectorization request here.
+        return;
+      } else if (parsed->route == kPipelineRoute) {
+        // Bridge owns the constructed program loop; the pipeline route owns
+        // the unique native-capable loop at or below that subject.  When the
+        // original program already contains a loop, Bridge becomes an outer
+        // composition container and the native pipeliner explicitly refuses
+        // it.  Preserve the inner loop as the route subject instead of moving
+        // the stage request to the newly constructed outer loop.
+        SmallVector<std::pair<scf::ForOp, LoopDependenceCertificate>>
+            pipelineSubjects;
+        loop.walk([&](scf::ForOp candidate) {
+          LoopDependenceCertificate certificate =
+              certifyNativeDynamicPipelineSubject(candidate);
+          if (certificate.safe)
+            pipelineSubjects.emplace_back(candidate, std::move(certificate));
+        });
+        if (pipelineSubjects.size() != 1) {
+          reportFailure(
+              module,
+              Twine("Bridge composition requires one native-capable pipeline ") +
+                  "subject at or below the constructed loop; found " +
+                  Twine(pipelineSubjects.size()));
+          return signalPassFailure();
+        }
+        scf::ForOp pipelineSubject = pipelineSubjects.front().first;
+        if (pipelineSubject->hasAttr(kSubjectAttr) ||
+            pipelineSubject->hasAttr("tt.loop_unroll_factor") ||
+            pipelineSubject->hasAttr("tt.num_stages")) {
+          reportFailure(
+              module,
+              "Bridge-composed pipeline subject carries conflicting guidance");
+          return signalPassFailure();
+        }
+        pipelineSubject->setAttr(
+            kSubjectAttr, subjectLocator(module.getContext(), *parsed));
+        pipelineSubject->setAttr(
+            "tt.num_stages",
+            builder.getI32IntegerAttr(parsed->stageCount));
       } else {
         loop->setAttr("tt.loop_unroll_factor",
                       builder.getI32IntegerAttr(parsed->unrollFactor));
@@ -6948,6 +7473,10 @@ public:
           op.setAttr(kBridgeRoleAttr, builder.getStringAttr(
               isa<LoadOp>(op) ? "load" : isa<StoreOp>(op) ? "store" : "compute"));
           op.setAttr(kBridgeOrdinalAttr, builder.getI32IntegerAttr(ordinal++));
+          op.setAttr(
+              kBridgeGroupRefAttr,
+              builder.getStringAttr(
+                  (Twine("top:") + Twine(ordinal - 1)).str()));
         }
       }
       return;
@@ -7018,14 +7547,15 @@ public:
               "tt.loop_unroll_factor",
               builder.getI32IntegerAttr(*exactStaticTripCount(loop)));
         }
-        for (scf::ForOp leaf : nest.leaves) {
+        {
           std::string roleSubject =
               parsed->subjectRef + ".static." +
               std::to_string(subjectOrdinal++);
-          if (failed(tagProviderClosedLeaf(leaf, roleSubject, builder))) {
+          if (failed(tagProviderClosedNest(
+                  nest.root, roleSubject, builder))) {
             reportFailure(
                 module,
-                "provider-closed static leaf cannot form load/compute/reduce phases");
+                "provider-closed static nest has no operation-neutral group");
             return signalPassFailure();
           }
         }
@@ -7033,17 +7563,10 @@ public:
       (*entry)->setAttr(kRouteAttr, builder.getStringAttr(parsed->route));
       (*entry)->setAttr(kSubjectRefAttr,
                         builder.getStringAttr(parsed->subjectRef));
-      bool independentReduction = llvm::all_of(
-          eligible, [](const ClosedNest &nest) {
-            return nest.certificate ==
-                   "independent_iteration_exact_inner_reduction_v1";
-          });
       (*entry)->setAttr(
           kDependenceAttr,
           builder.getStringAttr(
-              independentReduction
-                  ? "independent_iteration_exact_inner_reduction_v1"
-                  : "provider_closed_complete_static_nest_v1"));
+              "provider_closed_operation_neutral_static_nest_v2"));
       return;
     }
     if (parsed->runtimeGuardedLogical) {
@@ -7128,6 +7651,13 @@ public:
     }
 
     if (parsed->route == kPipelineRoute) {
+      llvm::DenseMap<Operation *, std::string> pipelinePlanningLocators;
+      int64_t pipelinePlanningCutOrdinal = 0;
+      (*entry).walk([&](scf::ForOp loop) {
+        pipelinePlanningLocators[loop.getOperation()] =
+            "planning-cut.loop." +
+            std::to_string(pipelinePlanningCutOrdinal++);
+      });
       SmallVector<std::pair<scf::ForOp, LoopDependenceCertificate>> eligible;
       std::string lastReason = "no scf.for found";
       (*entry).walk([&](scf::ForOp loop) {
@@ -7138,7 +7668,50 @@ public:
         else
           lastReason = std::move(certificate.reason);
       });
-      if (eligible.size() != 1) {
+      if (parsed->providerBoundPipelineSubjectSet) {
+        if (eligible.size() != parsed->providerBoundMembers.size()) {
+          reportFailure(
+              module,
+              "Plan-bound pipeline set does not name every capable loop");
+          return signalPassFailure();
+        }
+        SmallVector<std::pair<scf::ForOp, LoopDependenceCertificate>> selected;
+        for (const auto &member : parsed->providerBoundMembers) {
+          auto found = llvm::find_if(
+              eligible, [&](auto &candidate) {
+                return pipelinePlanningLocators.lookup(
+                           candidate.first.getOperation()) ==
+                       member.providerLoopLocator;
+              });
+          if (found == eligible.end()) {
+            reportFailure(
+                module,
+                Twine("Plan-bound pipeline locator is not capable: ") +
+                    member.providerLoopLocator);
+            return signalPassFailure();
+          }
+          auto exactTrip = exactStaticTripCount(found->first);
+          bool tripMatches =
+              member.exactStaticTripCount > 0
+                  ? exactTrip && *exactTrip == member.exactStaticTripCount
+                  : !exactTrip &&
+                        member.runtimeMainTailCertificateRef ==
+                            "native_dynamic_unroll_main_ordered_remainder_v1";
+          if (!tripMatches ||
+              found->second.kind !=
+                  member.routeCapabilityCertificateRef ||
+              member.nestingDepth != 0 ||
+              member.routeFactor != parsed->stageCount) {
+            reportFailure(
+                module,
+                Twine("Plan-bound pipeline facts changed at locator: ") +
+                    member.providerLoopLocator);
+            return signalPassFailure();
+          }
+          selected.push_back(*found);
+        }
+        eligible = std::move(selected);
+      } else if (eligible.size() != 1) {
         reportFailure(
             module,
             Twine("selected native pipeline route requires one compatible "
@@ -7146,24 +7719,40 @@ public:
                 lastReason);
         return signalPassFailure();
       }
-      scf::ForOp loop = eligible.front().first;
-      if (loop->hasAttr(kSubjectAttr) ||
-          loop->hasAttr("tt.loop_unroll_factor")) {
-        reportFailure(
-            module,
-            "selected pipeline subject carries stale or conflicting guidance");
-        return signalPassFailure();
+      for (auto [ordinal, candidate] : llvm::enumerate(eligible)) {
+        scf::ForOp loop = candidate.first;
+        if (loop->hasAttr(kSubjectAttr) ||
+            loop->hasAttr("tt.loop_unroll_factor") ||
+            loop->hasAttr("tt.num_stages")) {
+          reportFailure(
+              module,
+              "selected pipeline subject carries stale or conflicting guidance");
+          return signalPassFailure();
+        }
+        loop->setAttr(kSubjectAttr,
+                      subjectLocator(module.getContext(), *parsed));
+        loop->setAttr("tt.num_stages",
+                      builder.getI32IntegerAttr(parsed->stageCount));
+        if (parsed->providerBoundPipelineSubjectSet)
+          loop->setAttr(
+              kPipelineMemberRefAttr,
+              builder.getStringAttr(
+                  parsed->providerBoundMembers[ordinal].memberRef));
       }
-      loop->setAttr(kSubjectAttr,
-                    subjectLocator(module.getContext(), *parsed));
-      loop->setAttr("tt.num_stages",
-                    builder.getI32IntegerAttr(parsed->stageCount));
       (*entry)->setAttr(kRouteAttr, builder.getStringAttr(parsed->route));
       (*entry)->setAttr(kSubjectRefAttr,
                         builder.getStringAttr(parsed->subjectRef));
       (*entry)->setAttr(
           kDependenceAttr,
-          builder.getStringAttr(eligible.front().second.kind));
+          builder.getStringAttr(
+              parsed->providerBoundPipelineSubjectSet
+                  ? "provider_bound_pipeline_subject_set_v1"
+                  : eligible.front().second.kind));
+      if (parsed->providerBoundPipelineSubjectSet)
+        (*entry)->setAttr(
+            kProviderBoundMembersAttr,
+            builder.getStringAttr(
+                parsed->providerBoundMemberSignature));
       return;
     }
 
@@ -7224,12 +7813,41 @@ public:
               loop, generalLoads, generalComputes, generalStates,
               /*requireVectorizableTensorLoad=*/
                   parsed->route == kLogicalRoute);
-      if (generalCertificate.safe)
+      if (generalCertificate.safe) {
         eligible.push_back(ExistingLoopRouteSubject{
             loop, planningCutLocators.lookup(loop.getOperation()),
             parentLocator, generalCertificate.kind, "", nestingDepth, 0,
             std::move(generalLoads), std::move(generalComputes),
             std::move(generalStates), std::move(generalCertificate), true});
+        return;
+      }
+      if (parsed->route == kLogicalRoute) {
+        LoopDependenceCertificate operationPacking =
+            certifyOperationNeutralExactPacking(loop);
+        if (!operationPacking.safe)
+          return;
+        SmallVector<Operation *> operations;
+        for (Operation &operation : loop.getBody()->without_terminator())
+          operations.push_back(&operation);
+        eligible.push_back(ExistingLoopRouteSubject{
+            loop, planningCutLocators.lookup(loop.getOperation()),
+            parentLocator, operationPacking.kind, "", nestingDepth, 0,
+            {}, std::move(operations), {}, std::move(operationPacking), true});
+        return;
+      }
+      if (parsed->route == kPhaseRoute) {
+        LoopDependenceCertificate operationNeutral =
+            certifyOperationNeutralFullUnrollReorder(loop);
+        if (!operationNeutral.safe)
+          return;
+        SmallVector<Operation *> operations;
+        for (Operation &operation : loop.getBody()->without_terminator())
+          operations.push_back(&operation);
+        eligible.push_back(ExistingLoopRouteSubject{
+            loop, planningCutLocators.lookup(loop.getOperation()),
+            parentLocator, operationNeutral.kind, "", nestingDepth, 0,
+            {}, std::move(operations), {}, std::move(operationNeutral), true});
+      }
     });
     if (parsed->providerBoundSubjectSet) {
       SmallVector<ExistingLoopRouteSubject, 2> selected;
@@ -7341,6 +7959,16 @@ public:
       if (!exactTrip || *exactTrip != requestedFactor)
         loop->setAttr(kMainTailAttr,
                       builder.getStringAttr("native_factor_requested"));
+      int64_t operationGroupOrdinal = 0;
+      for (Operation &operation : loop.getBody()->without_terminator()) {
+        operation.setAttr(
+            kOperationGroupRefAttr,
+            builder.getStringAttr(
+                (Twine(roleSubject) + ":op:" +
+                 Twine(operationGroupOrdinal++))
+                    .str()));
+        operation.setAttr(kRoleSubjectAttr, roleSubjectAttr);
+      }
       int64_t loadIndex = 0;
       for (Operation *op : subject.loads) {
         op->setAttr(kRoleAttr, builder.getStringAttr("load"));
@@ -7360,8 +7988,8 @@ public:
     }
     StringRef aggregateCertificate =
         parsed->route == kLogicalRoute
-            ? "per_loop_order_preserving_load_vectorization_v1"
-            : "per_loop_order_preserving_read_exposure_v1";
+            ? "per_loop_exact_operation_vectorization_v3"
+            : "per_loop_operation_neutral_topological_reorder_v1";
     (*entry)->setAttr(
         kDependenceAttr,
         builder.getStringAttr(
@@ -7484,6 +8112,209 @@ SmallVector<Operation *> blockOrder(const llvm::SmallPtrSetImpl<Operation *> &se
     if (set.contains(&operation))
       result.push_back(&operation);
   return result;
+}
+
+// Reorder one fully expanded existing-loop subject by a deterministic stable
+// topological sort.  SSA def-use edges are exact.  Every operation that is
+// effectful or not speculatable also enters one source-order barrier chain, so
+// no observable ordering is guessed.  Among simultaneously ready nodes the
+// scheduler prefers the source-operation identity of their nearest downstream
+// consumer.  This groups any repeated code that dependencies permit without
+// privileging load, store, reduction or an operator family.
+LogicalResult materializeOperationNeutralPhase(
+    FuncOp func, std::optional<StringRef> subject = std::nullopt,
+    bool clearLineage = true) {
+  llvm::DenseMap<Block *, SmallVector<Operation *>> byBlock;
+  SmallVector<Block *> blockOrderSeen;
+  func.walk([&](Operation *operation) {
+    if (!operation->hasAttr(kOperationGroupRefAttr))
+      return;
+    auto roleSubject = operation->getAttrOfType<StringAttr>(kRoleSubjectAttr);
+    if (subject && (!roleSubject || roleSubject.getValue() != *subject))
+      return;
+    Block *block = operation->getBlock();
+    if (!byBlock.count(block))
+      blockOrderSeen.push_back(block);
+    byBlock[block].push_back(operation);
+  });
+  if (byBlock.empty())
+    return failure();
+
+  int64_t totalGroups = 0;
+  int64_t totalReordered = 0;
+  bool scheduledAny = false;
+  for (Block *block : blockOrderSeen) {
+    SmallVector<Operation *> tagged = std::move(byBlock[block]);
+    SmallVector<Operation *> tail;
+    llvm::copy_if(tagged, std::back_inserter(tail), [](Operation *operation) {
+      auto partition = operation->getAttrOfType<StringAttr>(
+          kUnrollPartitionLineageAttr);
+      return partition && partition.getValue() == "tail";
+    });
+    llvm::erase_if(tagged, [](Operation *operation) {
+      auto partition = operation->getAttrOfType<StringAttr>(
+          kUnrollPartitionLineageAttr);
+      return partition && partition.getValue() == "tail";
+    });
+    for (Operation *operation : tail) {
+      operation->removeAttr(kRoleAttr);
+      operation->removeAttr(kRoleSubjectAttr);
+      operation->removeAttr(kRoleIndexAttr);
+      operation->removeAttr(kOperationGroupRefAttr);
+      operation->removeAttr(kUnrollPartitionLineageAttr);
+    }
+    if (tagged.empty())
+      continue;
+
+    llvm::SmallPtrSet<Operation *, 32> taggedSet(tagged.begin(), tagged.end());
+    Operation *first = nullptr;
+    Operation *last = nullptr;
+    for (Operation &operation : *block)
+      if (taggedSet.contains(&operation)) {
+        if (!first)
+          first = &operation;
+        last = &operation;
+      }
+    if (!first || !last)
+      return failure();
+
+    SmallVector<Operation *> nodes;
+    for (Operation *operation = first;; operation = operation->getNextNode()) {
+      nodes.push_back(operation);
+      if (operation == last)
+        break;
+      if (!operation->getNextNode())
+        return failure();
+    }
+    llvm::DenseMap<Operation *, unsigned> nodeIndex;
+    for (auto [index, operation] : llvm::enumerate(nodes))
+      nodeIndex[operation] = index;
+    SmallVector<SmallVector<unsigned>> successors(nodes.size());
+    SmallVector<unsigned> indegree(nodes.size(), 0);
+    std::set<std::pair<unsigned, unsigned>> edges;
+    auto addEdge = [&](Operation *from, Operation *to) {
+      auto fromPosition = nodeIndex.find(from);
+      auto toPosition = nodeIndex.find(to);
+      if (fromPosition == nodeIndex.end() || toPosition == nodeIndex.end() ||
+          fromPosition->second == toPosition->second)
+        return;
+      unsigned source = fromPosition->second;
+      unsigned target = toPosition->second;
+      if (!edges.insert({source, target}).second)
+        return;
+      successors[source].push_back(target);
+      ++indegree[target];
+    };
+    for (Operation *root : nodes)
+      root->walk([&](Operation *nested) {
+        for (Value operand : nested->getOperands()) {
+          Operation *definition = operand.getDefiningOp();
+          if (definition)
+            addEdge(definition, root);
+        }
+      });
+    Operation *previousBarrier = nullptr;
+    for (Operation *operation : nodes)
+      if (!isMemoryEffectFree(operation) || !isSpeculatable(operation)) {
+        if (previousBarrier)
+          addEdge(previousBarrier, operation);
+        previousBarrier = operation;
+      }
+
+    std::map<std::string, unsigned> groupRanks;
+    unsigned nextGroupRank = 0;
+    for (Operation *operation : nodes) {
+      auto group = operation->getAttrOfType<StringAttr>(
+          kOperationGroupRefAttr);
+      if (group && !groupRanks.count(group.getValue().str()))
+        groupRanks[group.getValue().str()] = nextGroupRank++;
+    }
+    totalGroups += nextGroupRank;
+    const unsigned noPriority = nodes.size() + nextGroupRank + 1;
+    SmallVector<unsigned> priority(nodes.size(), noPriority);
+    for (auto [index, operation] : llvm::enumerate(nodes))
+      if (auto group = operation->getAttrOfType<StringAttr>(
+              kOperationGroupRefAttr))
+        priority[index] = groupRanks[group.getValue().str()];
+    // Propagate the nearest downstream source identity to untagged induction,
+    // address and predicate scaffolding.  Repeated relaxation is deliberate:
+    // the graph is small and this remains correct even if the original block
+    // order is not itself a topological numbering for nested captures.
+    for (size_t iteration = 0; iteration < nodes.size(); ++iteration) {
+      bool changed = false;
+      for (size_t source = 0; source < nodes.size(); ++source)
+        for (unsigned target : successors[source])
+          if (priority[target] < priority[source]) {
+            priority[source] = priority[target];
+            changed = true;
+          }
+      if (!changed)
+        break;
+    }
+
+    SmallVector<unsigned> ready;
+    for (size_t index = 0; index < nodes.size(); ++index)
+      if (indegree[index] == 0)
+        ready.push_back(index);
+    SmallVector<Operation *> schedule;
+    while (!ready.empty()) {
+      auto selected = llvm::min_element(
+          ready, [&](unsigned left, unsigned right) {
+            return std::tie(priority[left], left) <
+                   std::tie(priority[right], right);
+          });
+      unsigned index = *selected;
+      ready.erase(selected);
+      schedule.push_back(nodes[index]);
+      for (unsigned successor : successors[index])
+        if (--indegree[successor] == 0)
+          ready.push_back(successor);
+    }
+    if (schedule.size() != nodes.size())
+      return failure();
+
+    Operation *anchor = first->getPrevNode();
+    for (Operation *operation : schedule) {
+      bool alreadyAdjacent = anchor ? anchor->getNextNode() == operation
+                                    : operation == &block->front();
+      if (!alreadyAdjacent) {
+        if (anchor)
+          operation->moveAfter(anchor);
+        else
+          operation->moveBefore(&block->front());
+        ++totalReordered;
+      }
+      anchor = operation;
+    }
+    if (clearLineage)
+      for (Operation *operation : tagged) {
+        operation->removeAttr(kRoleAttr);
+        operation->removeAttr(kRoleSubjectAttr);
+        operation->removeAttr(kRoleIndexAttr);
+        operation->removeAttr(kOperationGroupRefAttr);
+        operation->removeAttr(kUnrollPartitionLineageAttr);
+      }
+    scheduledAny = true;
+  }
+  if (!scheduledAny || totalGroups == 0)
+    return failure();
+  auto previousGroups =
+      func->getAttrOfType<IntegerAttr>(kPhaseOperationGroupCountAttr);
+  auto previousReordered =
+      func->getAttrOfType<IntegerAttr>(kPhaseOperationReorderedCountAttr);
+  func->setAttr(
+      kPhaseOperationGroupCountAttr,
+      IntegerAttr::get(IntegerType::get(func.getContext(), 64),
+                       totalGroups +
+                           (previousGroups ? previousGroups.getInt() : 0)));
+  func->setAttr(
+      kPhaseOperationReorderedCountAttr,
+      IntegerAttr::get(IntegerType::get(func.getContext(), 64),
+                       totalReordered +
+                           (previousReordered
+                                ? previousReordered.getInt()
+                                : 0)));
+  return success();
 }
 
 LogicalResult materializePhase(FuncOp func,
@@ -7754,21 +8585,60 @@ LogicalResult materializePhase(FuncOp func,
 
 LogicalResult inlineBridgeHelpers(FuncOp func, bool invariantHoisting);
 
-LogicalResult materializeBridgePhase(FuncOp func, bool clearLineage = true) {
+// Expose structured Bridge service as straight-line predicated operations
+// before either downstream route reasons about correspondence.  This is a
+// shared subject normalization, not phase-major scheduling: it changes no
+// operation order and grants no route-specific capability.
+LogicalResult normalizeBridgeStructuredConditionals(
+    FuncOp func, std::string *failureReason = nullptr) {
+  while (true) {
+    scf::IfOp outermost;
+    func.walk([&](scf::IfOp ifOp) {
+      if (outermost || !ifOp->hasAttr(kBridgeRoleAttr))
+        return;
+      auto parent = ifOp->getParentOfType<scf::IfOp>();
+      if (!parent || !parent->hasAttr(kBridgeRoleAttr))
+        outermost = ifOp;
+    });
+    if (!outermost)
+      return success();
+    int64_t ordinal = 0;
+    if (auto attr = outermost->getAttrOfType<IntegerAttr>(kBridgeOrdinalAttr))
+      ordinal = attr.getInt();
+    std::string reason;
+    if (failed(predicateAndInlineBridgeIf(outermost, ordinal, reason))) {
+      if (failureReason)
+        *failureReason = reason;
+      return failure();
+    }
+  }
+}
+
+// Fully unroll one Bridge subject and group corresponding copies of each
+// source operation.  The route is operation-neutral: load, store, reduction
+// and arithmetic are not phases and none of them is mandatory.  Stable
+// group_ref lineage identifies source-operation correspondence; SSA backward
+// slices and the Bridge effect certificate are the only scheduling authority.
+LogicalResult materializeBridgePhase(FuncOp func, bool clearLineage = true,
+                                     std::string *failureReason = nullptr) {
+  auto reject = [&](StringRef reason) -> LogicalResult {
+    if (failureReason)
+      *failureReason = reason.str();
+    return failure();
+  };
+  std::string predicationReason;
+  if (failed(normalizeBridgeStructuredConditionals(
+          func, &predicationReason)))
+    return reject((Twine("structured Bridge phase predication failed: ") +
+                   predicationReason).str());
   SmallVector<Operation *> tagged;
-  SmallVector<Operation *> loads;
-  SmallVector<Operation *> stores;
   SmallVector<Operation *> helperCalls;
   func.walk([&](Operation *op) {
     auto role = op->getAttrOfType<StringAttr>(kBridgeRoleAttr);
     if (!role)
       return;
     tagged.push_back(op);
-    if (role.getValue() == "load")
-      loads.push_back(op);
-    else if (role.getValue() == "store")
-      stores.push_back(op);
-    else if (role.getValue() == "multi_axis_helper_call")
+    if (role.getValue() == "multi_axis_helper_call")
       helperCalls.push_back(op);
   });
   // A helper-call sequence is only program-major.  It is not phase-major
@@ -7780,94 +8650,142 @@ LogicalResult materializeBridgePhase(FuncOp func, bool clearLineage = true) {
     if (helperCalls.size() != tagged.size() ||
         llvm::any_of(helperCalls,
                      [&](Operation *op) { return op->getBlock() != block; }))
-      return failure();
+      return reject("helper calls do not form one complete single-block subject");
     if (failed(inlineBridgeHelpers(func, /*invariantHoisting=*/false)))
-      return failure();
-    return materializeBridgePhase(func, clearLineage);
+      return reject("complete helper subject cannot be structurally inlined");
+    return materializeBridgePhase(func, clearLineage, failureReason);
   }
-  if (tagged.empty() || loads.empty() || stores.empty())
-    return failure();
+  if (tagged.empty())
+    return reject("Bridge clone lineage is empty");
   Block *block = tagged.front()->getBlock();
   if (llvm::any_of(tagged, [&](Operation *op) { return op->getBlock() != block; }))
-    return failure();
+    return reject("Bridge clone lineage spans multiple basic blocks");
 
   llvm::SmallPtrSet<Operation *, 32> taggedSet(tagged.begin(), tagged.end());
   Operation *first = nullptr;
   llvm::SmallPtrSet<Operation *, 32> fixedPrefix;
+  std::map<std::string, SmallVector<Operation *>> rootsByGroup;
+  std::map<std::string, int64_t> sourceOrdinalByGroup;
+  SmallVector<std::string> groupOrder;
   for (Operation &op : *block) {
     if (!first && taggedSet.contains(&op))
       first = &op;
     if (!first)
       fixedPrefix.insert(&op);
+    if (!taggedSet.contains(&op))
+      continue;
+    auto groupRef = op.getAttrOfType<StringAttr>(kBridgeGroupRefAttr);
+    if (!groupRef)
+      return reject("Bridge clone lineage has no source-operation group reference");
+    auto sourceOrdinal = op.getAttrOfType<IntegerAttr>(kBridgeOrdinalAttr);
+    if (!sourceOrdinal)
+      return reject("Bridge clone lineage has no source-operation ordinal");
+    std::string group = groupRef.getValue().str();
+    auto [position, inserted] = rootsByGroup.try_emplace(group);
+    if (inserted) {
+      groupOrder.push_back(group);
+      sourceOrdinalByGroup[group] = sourceOrdinal.getInt();
+    } else
+      sourceOrdinalByGroup[group] =
+          std::min(sourceOrdinalByGroup[group], sourceOrdinal.getInt());
+    position->second.push_back(&op);
   }
   if (!first)
-    return failure();
-  llvm::SmallPtrSet<Operation *, 32> loadPhase;
-  if (failed(dependencyClosure(loads, fixedPrefix, loadPhase)))
-    return failure();
-  llvm::SmallPtrSet<Operation *, 32> storeSet(stores.begin(), stores.end());
-  if (llvm::any_of(stores, [&](Operation *op) { return loadPhase.contains(op); }))
-    return failure();
+    return reject("Bridge clone lineage has no first operation");
 
-  SmallVector<Operation *> computeRoots;
-  for (Operation *op : tagged)
-    if (!loadPhase.contains(op) && !storeSet.contains(op))
-      computeRoots.push_back(op);
-  llvm::SmallPtrSet<Operation *, 32> loadStops;
-  loadStops.insert(fixedPrefix.begin(), fixedPrefix.end());
-  loadStops.insert(loadPhase.begin(), loadPhase.end());
-  llvm::SmallPtrSet<Operation *, 32> computePhase;
-  if (failed(dependencyClosure(computeRoots, loadStops, computePhase)))
-    return failure();
-  if (llvm::any_of(stores,
-                   [&](Operation *op) { return computePhase.contains(op); }))
-    return failure();
+  // Native unrolling and structured-region predication may interleave clones
+  // so the first textual occurrence of a group is not the source-program
+  // order.  Cross-copy reordering must nevertheless preserve the original
+  // effect order.  Restore that order from the minimum flattened Bridge
+  // ordinal of each source-operation group.  Some Bridge constructors retain
+  // the source ordinal on every copy while others number the clone-major
+  // stream; the minimum is the same source-order witness in both forms.  The
+  // operation name and service category are deliberately irrelevant.
+  llvm::sort(groupOrder, [&](const std::string &left,
+                             const std::string &right) {
+    return std::tie(sourceOrdinalByGroup[left], left) <
+           std::tie(sourceOrdinalByGroup[right], right);
+  });
 
-  llvm::SmallPtrSet<Operation *, 32> priorPhases;
-  priorPhases.insert(loadStops.begin(), loadStops.end());
-  priorPhases.insert(computePhase.begin(), computePhase.end());
-  llvm::SmallPtrSet<Operation *, 32> storePhase;
-  if (failed(dependencyClosure(stores, priorPhases, storePhase)))
-    return failure();
-  if (llvm::any_of(storePhase, [&](Operation *op) {
-        return op->getBlock() != block ||
-               (!storeSet.contains(op) && !isMemoryEffectFree(op));
-      }))
-    return failure();
+  // Every observable effect in the schedulable suffix must be an owned root.
+  // Pure untagged address/predicate scaffolding is assigned by SSA closure;
+  // an unowned effect would make cross-copy reordering unprovable.
+  for (Operation &op : *block)
+    if (&op != block->getTerminator() && !fixedPrefix.contains(&op) &&
+        !taggedSet.contains(&op) && !isMemoryEffectFree(&op))
+      return reject("operation grouping crosses an unowned observable effect");
 
-  llvm::SmallPtrSet<Operation *, 32> accounted;
-  accounted.insert(loadPhase.begin(), loadPhase.end());
-  accounted.insert(computePhase.begin(), computePhase.end());
-  accounted.insert(storePhase.begin(), storePhase.end());
-  if (llvm::any_of(tagged,
-                   [&](Operation *op) { return !accounted.contains(op); }))
-    return failure();
-
-  SmallVector<Operation *> orderedLoads = blockOrder(loadPhase, block);
-  SmallVector<Operation *> orderedCompute = blockOrder(computePhase, block);
-  SmallVector<Operation *> orderedStores = blockOrder(storePhase, block);
-  Operation *anchor = first->getPrevNode();
-  if (orderedLoads.empty() || orderedCompute.empty() || orderedStores.empty())
-    return failure();
-  Operation *last = anchor;
-  auto movePhase = [&](ArrayRef<Operation *> phase) {
-    for (Operation *op : phase) {
-      if (!last) {
-        if (op != &block->front())
-          op->moveBefore(&block->front());
-      } else if (op != last) {
-        op->moveAfter(last);
+  llvm::SmallPtrSet<Operation *, 32> scheduled;
+  scheduled.insert(fixedPrefix.begin(), fixedPrefix.end());
+  SmallVector<SmallVector<Operation *>> orderedGroups;
+  SmallVector<std::string> remainingGroups(groupOrder.begin(),
+                                            groupOrder.end());
+  while (!remainingGroups.empty()) {
+    bool selectedReadyGroup = false;
+    for (size_t index = 0; index < remainingGroups.size(); ++index) {
+      const std::string &group = remainingGroups[index];
+      llvm::SmallPtrSet<Operation *, 32> closure;
+      if (failed(dependencyClosure(rootsByGroup[group], scheduled, closure)))
+        return reject(
+            "operation-group backward slice crosses an observable effect");
+      bool hasUnscheduledForeignGroup = false;
+      for (Operation *operation : closure) {
+        if (!taggedSet.contains(operation))
+          continue;
+        auto ref = operation->getAttrOfType<StringAttr>(kBridgeGroupRefAttr);
+        if (!ref)
+          return reject(
+              "operation-group dependency has no source-operation identity");
+        hasUnscheduledForeignGroup |= ref.getValue() != group;
       }
-      last = op;
+      if (hasUnscheduledForeignGroup)
+        continue;
+      SmallVector<Operation *> ordered = blockOrder(closure, block);
+      if (ordered.empty())
+        return reject(
+            "source-operation group has no materializable operations");
+      scheduled.insert(closure.begin(), closure.end());
+      orderedGroups.push_back(std::move(ordered));
+      remainingGroups.erase(remainingGroups.begin() + index);
+      selectedReadyGroup = true;
+      break;
     }
-  };
-  movePhase(orderedLoads);
-  movePhase(orderedCompute);
-  movePhase(orderedStores);
+    if (!selectedReadyGroup)
+      return reject(
+          "operation-group dependency graph has no stable ready group");
+  }
+  if (llvm::any_of(tagged,
+                   [&](Operation *op) { return !scheduled.contains(op); }))
+    return reject("Bridge clone lineage contains an unaccounted operation");
+
+  Operation *last = first->getPrevNode();
+  int64_t reorderedCount = 0;
+  for (ArrayRef<Operation *> group : orderedGroups)
+    for (Operation *operation : group) {
+      bool alreadyAdjacent = last ? last->getNextNode() == operation
+                                  : operation == &block->front();
+      if (!alreadyAdjacent) {
+        if (last)
+          operation->moveAfter(last);
+        else
+          operation->moveBefore(&block->front());
+        ++reorderedCount;
+      }
+      last = operation;
+    }
+  func->setAttr(
+      kPhaseOperationGroupCountAttr,
+      IntegerAttr::get(IntegerType::get(func.getContext(), 64),
+                       static_cast<int64_t>(groupOrder.size())));
+  func->setAttr(
+      kPhaseOperationReorderedCountAttr,
+      IntegerAttr::get(IntegerType::get(func.getContext(), 64),
+                       reorderedCount));
   if (clearLineage)
     for (Operation *op : tagged) {
       op->removeAttr(kBridgeRoleAttr);
       op->removeAttr(kBridgeOrdinalAttr);
+      op->removeAttr(kBridgeGroupRefAttr);
     }
   return success();
 }
@@ -7958,6 +8876,12 @@ LogicalResult inlineBridgeHelpers(FuncOp func, bool invariantHoisting) {
         clone->setAttr(kBridgeOrdinalAttr,
                        builder.getI64IntegerAttr(
                            operationOrdinals.lookup(&operation)));
+        clone->setAttr(
+            kBridgeGroupRefAttr,
+            builder.getStringAttr(
+                (Twine("helper:") +
+                 Twine(operationOrdinals.lookup(&operation)))
+                    .str()));
       }
     }
     call.erase();
@@ -7968,34 +8892,284 @@ LogicalResult inlineBridgeHelpers(FuncOp func, bool invariantHoisting) {
   return success();
 }
 
+// Pack corresponding copies of any regionless elementwise tensor operation
+// whose exact higher-rank form is admitted by MLIR's Elementwise trait.  This
+// is an operation capability rule: it names neither a workload nor a favored
+// opcode category.  Memory service and reductions retain their separate exact
+// adapters because their packed semantics are not obtained by merely adding a
+// leading tensor dimension.
+int64_t materializeExactElementwiseOperationGroups(
+    FuncOp func, StringRef groupAttribute, int64_t factor) {
+  if (factor < 2 || !llvm::isPowerOf2_64(factor))
+    return 0;
+  using GroupKey = std::pair<Block *, std::string>;
+  std::map<GroupKey, SmallVector<Operation *>> groups;
+  SmallVector<GroupKey> order;
+  func.walk([&](Operation *operation) {
+    auto group = operation->getAttrOfType<StringAttr>(groupAttribute);
+    auto partition = operation->getAttrOfType<StringAttr>(
+        kUnrollPartitionLineageAttr);
+    if (!group || (partition && partition.getValue() == "tail"))
+      return;
+    GroupKey key{operation->getBlock(), group.getValue().str()};
+    auto [position, inserted] = groups.try_emplace(key);
+    if (inserted)
+      order.push_back(key);
+    position->second.push_back(operation);
+  });
+
+  auto strippedAttributes = [&](Operation *operation) {
+    NamedAttrList attributes(operation->getAttrs());
+    attributes.erase(groupAttribute);
+    attributes.erase(kBridgeRoleAttr);
+    attributes.erase(kBridgeOrdinalAttr);
+    attributes.erase(kRoleAttr);
+    attributes.erase(kRoleSubjectAttr);
+    attributes.erase(kRoleIndexAttr);
+    attributes.erase(kUnrollPartitionLineageAttr);
+    return attributes.getDictionary(operation->getContext());
+  };
+  auto joinValues = [](OpBuilder &builder, Location loc,
+                       ArrayRef<Value> values) -> FailureOr<Value> {
+    if (values.empty() || !llvm::isPowerOf2_64(values.size()))
+      return failure();
+    SmallVector<Value> current(values.begin(), values.end());
+    while (current.size() > 1) {
+      SmallVector<Value> next;
+      for (size_t index = 0; index < current.size(); index += 2)
+        next.push_back(JoinOp::create(
+            builder, loc, current[index], current[index + 1]));
+      current = std::move(next);
+    }
+    return current.front();
+  };
+  auto splitValue = [](OpBuilder &builder, Location loc, Value input,
+                       int64_t count) {
+    SmallVector<Value> current{input};
+    for (int64_t width = 1; width < count; width *= 2) {
+      SmallVector<Value> next;
+      for (Value value : current) {
+        auto split = SplitOp::create(builder, loc, value);
+        next.push_back(split.getOutLHS());
+        next.push_back(split.getOutRHS());
+      }
+      current = std::move(next);
+    }
+    return current;
+  };
+
+  int64_t packedCount = 0;
+  for (const GroupKey &key : order) {
+    SmallVector<Operation *> operations = groups[key];
+    if (operations.size() != static_cast<size_t>(factor))
+      continue;
+    llvm::sort(operations, [](Operation *left, Operation *right) {
+      return left->isBeforeInBlock(right);
+    });
+    Operation *prototype = operations.front();
+    if (!isGenericExactPackableOperation(prototype))
+      continue;
+    DictionaryAttr attributes = strippedAttributes(prototype);
+    bool compatible = llvm::all_of(
+        llvm::drop_begin(operations), [&](Operation *operation) {
+          return operation->getName() == prototype->getName() &&
+                 operation->getNumOperands() == prototype->getNumOperands() &&
+                 operation->getNumResults() == prototype->getNumResults() &&
+                 isGenericExactPackableOperation(operation) &&
+                 strippedAttributes(operation) == attributes;
+        });
+    if (!compatible)
+      continue;
+    llvm::SmallPtrSet<Operation *, 16> groupSet(
+        operations.begin(), operations.end());
+    if (prototype->getNumOperands() == 0)
+      continue;
+    SmallVector<Type> resultElementTypes;
+    for (unsigned resultIndex = 0;
+         resultIndex < prototype->getNumResults(); ++resultIndex) {
+      auto resultType = dyn_cast<RankedTensorType>(
+          prototype->getResult(resultIndex).getType());
+      if (!resultType || llvm::any_of(
+              llvm::drop_begin(operations), [&](Operation *operation) {
+                return operation->getResult(resultIndex).getType() !=
+                       resultType;
+              })) {
+        compatible = false;
+        break;
+      }
+      resultElementTypes.push_back(resultType.getElementType());
+    }
+    if (!compatible)
+      continue;
+    SmallVector<SmallVector<Value>> operandLanes(
+        prototype->getNumOperands());
+    for (unsigned operandIndex = 0;
+         operandIndex < prototype->getNumOperands(); ++operandIndex) {
+      Type expected = prototype->getOperand(operandIndex).getType();
+      if (!isa<RankedTensorType>(expected)) {
+        compatible = false;
+        break;
+      }
+      for (Operation *operation : operations) {
+        Value operand = operation->getOperand(operandIndex);
+        Operation *definition = operand.getDefiningOp();
+        if (operand.getType() != expected ||
+            (definition && groupSet.contains(definition))) {
+          compatible = false;
+          break;
+        }
+        operandLanes[operandIndex].push_back(operand);
+      }
+      if (!compatible)
+        break;
+    }
+    if (!compatible)
+      continue;
+
+    // The packed operation and its split leaves are inserted after the last
+    // source-lane operation.  That point must dominate every original use.
+    // A loop-carried chain can force lane 0's consumer to precede lane 1's
+    // corresponding producer even when the two producers share a source
+    // identity.  Packing that group would create use-before-definition IR.
+    // This is an exact SSA boundary, not an operation-category restriction;
+    // leave the group scalar and continue to other registered capabilities.
+    Operation *insertionAnchor = operations.back();
+    bool replacementDominatesAllUses = llvm::all_of(
+        operations, [&](Operation *operation) {
+          return llvm::all_of(operation->getResults(), [&](Value result) {
+            return llvm::all_of(result.getUses(), [&](OpOperand &use) {
+              Operation *topLevelUser =
+                  key.first->findAncestorOpInBlock(*use.getOwner());
+              return topLevelUser &&
+                     insertionAnchor->isBeforeInBlock(topLevelUser);
+            });
+          });
+        });
+    if (!replacementDominatesAllUses)
+      continue;
+
+    OpBuilder builder(operations.back());
+    builder.setInsertionPointAfter(operations.back());
+    SmallVector<Value> packedOperands;
+    for (ArrayRef<Value> lanes : operandLanes) {
+      FailureOr<Value> packed = joinValues(
+          builder, prototype->getLoc(), lanes);
+      if (failed(packed)) {
+        compatible = false;
+        break;
+      }
+      packedOperands.push_back(*packed);
+    }
+    if (!compatible)
+      continue;
+    auto packedShapeType = dyn_cast<RankedTensorType>(
+        packedOperands.front().getType());
+    if (!packedShapeType)
+      continue;
+    SmallVector<Type> packedResultTypes;
+    for (Type elementType : resultElementTypes)
+      packedResultTypes.push_back(RankedTensorType::get(
+          packedShapeType.getShape(), elementType,
+          packedShapeType.getEncoding()));
+    // Clone the registered operation so dialect properties that are not
+    // represented in the generic attribute dictionary remain exact.  Only
+    // operands, result tensor shape, and transient HBV lineage change.
+    Operation *packed = prototype->clone();
+    packed->setOperands(packedOperands);
+    for (auto [result, type] :
+         llvm::zip(packed->getResults(), packedResultTypes))
+      result.setType(type);
+    packed->removeAttr(groupAttribute);
+    packed->removeAttr(kBridgeRoleAttr);
+    packed->removeAttr(kBridgeOrdinalAttr);
+    packed->removeAttr(kRoleAttr);
+    packed->removeAttr(kRoleSubjectAttr);
+    packed->removeAttr(kRoleIndexAttr);
+    packed->removeAttr(kUnrollPartitionLineageAttr);
+    builder.insert(packed);
+    for (unsigned resultIndex = 0; resultIndex < packed->getNumResults();
+         ++resultIndex) {
+      SmallVector<Value> pieces = splitValue(
+          builder, prototype->getLoc(), packed->getResult(resultIndex), factor);
+      for (auto [operation, piece] : llvm::zip(operations, pieces))
+        operation->getResult(resultIndex).replaceAllUsesWith(piece);
+    }
+    for (Operation *operation : llvm::reverse(operations))
+      operation->erase();
+    ++packedCount;
+  }
+  if (packedCount) {
+    int64_t prior = 0;
+    if (auto count = func->getAttrOfType<IntegerAttr>(
+            kVectorizedOperationGroupCountAttr))
+      prior = count.getInt();
+    func->setAttr(
+        kVectorizedOperationGroupCountAttr,
+        IntegerAttr::get(IntegerType::get(func.getContext(), 64),
+                         prior + packedCount));
+  }
+  return packedCount;
+}
+
 LogicalResult materializeBridgeLogical(FuncOp func, int64_t routeFactor,
                                       bool invariantHoisting,
                                       bool tensorLaneFusion,
-                                      bool exactSplitElision) {
+                                      bool exactSplitElision,
+                                      std::string *failureReason = nullptr) {
+  auto reject = [&](StringRef reason) -> LogicalResult {
+    if (failureReason)
+      *failureReason = reason.str();
+    return failure();
+  };
   if (failed(inlineBridgeHelpers(func, invariantHoisting)))
-    return failure();
+    return reject("bridge_helper_inline_or_invariant_hoist_failed");
   if (!tensorLaneFusion)
-    return materializeBridgePhase(func);
-  if (failed(materializeBridgePhase(func, /*clearLineage=*/false)))
-    return failure();
+    return materializeBridgePhase(
+        func, /*clearLineage=*/true, failureReason);
+  std::string predicationReason;
+  if (failed(normalizeBridgeStructuredConditionals(
+          func, &predicationReason)))
+    return reject((Twine("structured Bridge logical predication failed: ") +
+                   predicationReason).str());
+  // Complete phase grouping is an optional normal form for logical packing,
+  // not a legality prerequisite.  When the group dependency graph is acyclic
+  // it exposes more dominance-safe packs; when a recurrence crosses groups,
+  // the phase scheduler has not mutated operation order and the exact local
+  // adapters below may still pack an independent group.
+  std::string optionalPhaseReason;
+  (void)materializeBridgePhase(
+      func, /*clearLineage=*/false, &optionalPhaseReason);
+  // Logical grouping is not conditional on a complete phase-major schedule.
+  // A loop-carried dependence may prevent all copies of every source
+  // operation from becoming contiguous even though an independent load,
+  // store, or elementwise group has an exact packed form.  Each adapter below
+  // proves its own SSA dominance, memory semantics, and effect boundary;
+  // recurrence-crossing groups remain scalar instead of vetoing the route.
   // Bridge owns the number of logical programs in the constructed subject;
   // the logical route owns the number of lanes grouped in each factorized
   // main iteration.  They coincide only on diagonal compositions.  Reading
   // Bridge cardinality here makes every legal off-diagonal composition ask a
   // route-local clone group to contain too many lanes.
   if (routeFactor < 2 || !llvm::isPowerOf2_64(routeFactor))
-    return failure();
+    return reject("route_factor_is_not_a_power_of_two_at_least_two");
   int64_t factor = routeFactor;
-  llvm::DenseMap<int64_t, SmallVector<LoadOp>> loadGroups;
-  llvm::DenseMap<int64_t, SmallVector<StoreOp>> storeGroups;
+  int64_t groupedElementwise = materializeExactElementwiseOperationGroups(
+      func, kBridgeGroupRefAttr, factor);
+  std::map<std::string, SmallVector<LoadOp>> loadGroups;
+  std::map<std::string, SmallVector<StoreOp>> storeGroups;
   func.walk([&](Operation *op) {
     auto ordinal = op->getAttrOfType<IntegerAttr>(kBridgeOrdinalAttr);
     if (!ordinal)
       return;
+    auto groupRef = op->getAttrOfType<StringAttr>(kBridgeGroupRefAttr);
+    std::string group = groupRef
+                            ? groupRef.getValue().str()
+                            : (Twine("ordinal:") +
+                               Twine(ordinal.getInt())).str();
     if (auto load = dyn_cast<LoadOp>(op))
-      loadGroups[ordinal.getInt()].push_back(load);
+      loadGroups[group].push_back(load);
     else if (auto store = dyn_cast<StoreOp>(op))
-      storeGroups[ordinal.getInt()].push_back(store);
+      storeGroups[group].push_back(store);
   });
   int64_t splitElisionCount = 0;
   auto joinValues = [&](OpBuilder &builder, Location loc,
@@ -8052,14 +9226,14 @@ LogicalResult materializeBridgeLogical(FuncOp func, int64_t routeFactor,
   };
 
   bool groupedLoad = false;
-  SmallVector<int64_t> loadOrdinals;
+  SmallVector<std::string> loadOrdinals;
   for (auto &entry : loadGroups)
     loadOrdinals.push_back(entry.first);
   llvm::sort(loadOrdinals);
-  for (int64_t ordinal : loadOrdinals) {
+  for (const std::string &ordinal : loadOrdinals) {
     auto &loads = loadGroups[ordinal];
     if (loads.size() != static_cast<size_t>(factor))
-      return failure();
+      return reject("bridge_load_group_cardinality_differs_from_route_factor");
     // Scalar service (for example one length or reduction value per virtual
     // program) has no logical tensor dimension to join.  Keep those loads in
     // the already phase-major schedule; at least one tensor load must still
@@ -8073,7 +9247,7 @@ LogicalResult materializeBridgeLogical(FuncOp func, int64_t routeFactor,
                  static_cast<bool>(load.getOther()) != hasOther ||
                  !load.getBoundaryCheck().empty() || load.getPadding();
         }))
-      return failure();
+      return reject("bridge_load_group_memory_semantics_are_not_exactly_packable");
 
     // Clone-major order can put a later virtual program's pointer/mask slice
     // after the first virtual program's consumer.  Grouping the loads at that
@@ -8086,13 +9260,13 @@ LogicalResult materializeBridgeLogical(FuncOp func, int64_t routeFactor,
     for (LoadOp load : loads) {
       for (Operation *user : load.getResult().getUsers()) {
         if (user->getBlock() != load->getBlock())
-          return failure();
+          return reject("bridge_load_result_crosses_a_basic_block");
         if (!earliestUser || user->isBeforeInBlock(earliestUser))
           earliestUser = user;
       }
     }
     if (!earliestUser)
-      return failure();
+      return reject("bridge_load_group_has_no_materializable_user");
     llvm::SmallPtrSet<Operation *, 32> moveSet;
     SmallVector<Operation *> worklist;
     for (LoadOp load : loads) {
@@ -8110,7 +9284,7 @@ LogicalResult materializeBridgeLogical(FuncOp func, int64_t routeFactor,
         auto dependencyLoad = dyn_cast<LoadOp>(definition);
         if ((!dependencyLoad && !isMemoryEffectFree(definition)) ||
             (dependencyLoad && dependencyLoad.getIsVolatile()))
-          return failure();
+          return reject("bridge_load_backward_slice_crosses_an_observable_effect");
         moveSet.insert(definition);
         worklist.push_back(definition);
       }
@@ -8134,19 +9308,19 @@ LogicalResult materializeBridgeLogical(FuncOp func, int64_t routeFactor,
     }
     auto pointer = joinValues(builder, loads.front().getLoc(), pointers);
     if (failed(pointer))
-      return failure();
+      return reject("bridge_load_pointer_group_cannot_be_joined_exactly");
     Value mask;
     if (masked) {
       auto joined = joinValues(builder, loads.front().getLoc(), masks);
       if (failed(joined))
-        return failure();
+        return reject("bridge_load_mask_group_cannot_be_joined_exactly");
       mask = *joined;
     }
     Value other;
     if (hasOther) {
       auto joined = joinValues(builder, loads.front().getLoc(), others);
       if (failed(joined))
-        return failure();
+        return reject("bridge_load_other_group_cannot_be_joined_exactly");
       other = *joined;
     }
     auto grouped = LoadOp::create(
@@ -8162,6 +9336,7 @@ LogicalResult materializeBridgeLogical(FuncOp func, int64_t routeFactor,
     groupedLoad = true;
   }
 
+  bool groupedStore = false;
   for (auto &entry : storeGroups) {
     auto &stores = entry.second;
     if (stores.size() != static_cast<size_t>(factor) ||
@@ -8172,7 +9347,7 @@ LogicalResult materializeBridgeLogical(FuncOp func, int64_t routeFactor,
           return static_cast<bool>(store.getMask()) != masked ||
                  !store.getBoundaryCheck().empty();
         }))
-      return failure();
+      return reject("bridge_store_group_memory_semantics_are_not_exactly_packable");
     // Every grouped value/mask must dominate the replacement store.  The
     // phase-major expansion keeps the old stores ordered after their value
     // producers, so place the grouped store after the final old store before
@@ -8190,11 +9365,11 @@ LogicalResult materializeBridgeLogical(FuncOp func, int64_t routeFactor,
     auto pointer = joinValues(builder, stores.front().getLoc(), pointers);
     auto value = joinValues(builder, stores.front().getLoc(), values);
     if (failed(pointer) || failed(value))
-      return failure();
+      return reject("bridge_store_pointer_or_value_group_cannot_be_joined_exactly");
     if (masked) {
       auto mask = joinValues(builder, stores.front().getLoc(), masks);
       if (failed(mask))
-        return failure();
+        return reject("bridge_store_mask_group_cannot_be_joined_exactly");
       StoreOp::create(builder, stores.front().getLoc(), *pointer, *value, *mask,
                       stores.front().getCache(), stores.front().getEvict());
     } else {
@@ -8203,6 +9378,7 @@ LogicalResult materializeBridgeLogical(FuncOp func, int64_t routeFactor,
     }
     for (StoreOp store : llvm::reverse(stores))
       store.erase();
+    groupedStore = true;
   }
   // Removing the grouped terminals above can leave the now redundant split
   // tree dead.  Erase from leaves to root; live boundary splits are retained.
@@ -8214,32 +9390,44 @@ LogicalResult materializeBridgeLogical(FuncOp func, int64_t routeFactor,
   func.walk([&](Operation *op) {
     op->removeAttr(kBridgeRoleAttr);
     op->removeAttr(kBridgeOrdinalAttr);
+    op->removeAttr(kBridgeGroupRefAttr);
   });
   func->setAttr(kSplitElisionAttr,
                 IntegerAttr::get(IntegerType::get(func.getContext(), 64),
                                  splitElisionCount));
-  // A scalar reduction result cannot be joined with tensor values.  In that
-  // case the route still performs real grouped tensor loads while retaining the
-  // already phase-major scalar stores.  Success continues to require a material
-  // load grouping, so this cannot degrade into plain unroll/reorder.
-  return success(groupedLoad);
+  // Route identity is an exact packed source-operation group.  Loads and
+  // stores are merely two operation-specific exact adapters; a pure
+  // elementwise group proves the same transformation even when either memory
+  // category is absent.  Conversely, unroll/reorder alone is not logical
+  // vectorization and therefore cannot make this route succeed.
+  if (groupedElementwise == 0 && !groupedLoad && !groupedStore)
+    return reject("bridge_subject_has_no_exactly_packable_operation_group");
+  return success();
 }
 
-// Coarse logical vectorization for an existing loop.  After the general
-// phase-major proof has exposed every read, corresponding clones of the same
-// source load are joined into one wider tensor load and immediately split
-// back into the original SSA leaves.  All compute and loop-carried state
-// operations retain their exact source order; this is memory-lane
-// vectorization, not floating-point reassociation.
-LogicalResult materializeOrderPreservingLoadVectorization(
-    FuncOp func, std::optional<StringRef> subject, int64_t unrollFactor) {
-  if (unrollFactor < 2 || !llvm::isPowerOf2_64(unrollFactor) ||
-      failed(materializePhase(
-          func, subject, /*generalCardinality=*/true, unrollFactor,
-          /*onlyBlock=*/nullptr, /*clearLineage=*/false)))
+// Exact corresponding-operation vectorization for an existing loop.  The
+// operation-neutral scheduler first exposes source-operation groups.  A
+// regionless elementwise tensor group may then use its generic packed form;
+// loads retain a dedicated exact adapter because memory semantics are not an
+// instance of the Elementwise trait.  No opcode category is required.
+LogicalResult materializeExactOperationVectorization(
+    FuncOp func, std::optional<StringRef> subject, int64_t unrollFactor,
+    std::string *failureReason = nullptr) {
+  auto reject = [&](StringRef reason) -> LogicalResult {
+    if (failureReason)
+      *failureReason = reason.str();
     return failure();
+  };
+  if (unrollFactor < 2 || !llvm::isPowerOf2_64(unrollFactor))
+    return reject("existing_loop_route_factor_is_not_a_power_of_two_at_least_two");
+  if (failed(materializeOperationNeutralPhase(
+          func, subject, /*clearLineage=*/false)))
+    return reject("existing_loop_operation_neutral_phase_schedule_failed");
 
-  llvm::DenseMap<Block *, llvm::DenseMap<int64_t, SmallVector<LoadOp>>>
+  int64_t groupedElementwise = materializeExactElementwiseOperationGroups(
+      func, kOperationGroupRefAttr, unrollFactor);
+
+  llvm::DenseMap<Block *, std::map<std::string, SmallVector<LoadOp>>>
       groupsByBlock;
   SmallVector<Block *> blocks;
   bool malformed = false;
@@ -8253,18 +9441,22 @@ LogicalResult materializeOrderPreservingLoadVectorization(
     auto load = dyn_cast<LoadOp>(op);
     if (!load)
       return;
-    auto index = op->getAttrOfType<IntegerAttr>(kRoleIndexAttr);
-    if (!index) {
+    auto group = op->getAttrOfType<StringAttr>(kOperationGroupRefAttr);
+    auto partition = op->getAttrOfType<StringAttr>(
+        kUnrollPartitionLineageAttr);
+    if (partition && partition.getValue() == "tail")
+      return;
+    if (!group) {
       malformed = true;
       return;
     }
     Block *block = op->getBlock();
     if (!groupsByBlock.contains(block))
       blocks.push_back(block);
-    groupsByBlock[block][index.getInt()].push_back(load);
+    groupsByBlock[block][group.getValue().str()].push_back(load);
   });
-  if (malformed || blocks.empty())
-    return failure();
+  if (malformed)
+    return reject("existing_loop_load_clone_has_no_source_operation_group");
 
   auto joinValues = [](OpBuilder &builder, Location loc,
                        ArrayRef<Value> inputs) -> FailureOr<Value> {
@@ -8295,17 +9487,32 @@ LogicalResult materializeOrderPreservingLoadVectorization(
     return current;
   };
 
+  using StoreGroupKey = std::pair<Block *, std::string>;
+  std::map<StoreGroupKey, SmallVector<StoreOp>> storeGroups;
+  SmallVector<StoreGroupKey> storeOrder;
+  func.walk([&](StoreOp store) {
+    auto roleSubject = store->getAttrOfType<StringAttr>(kRoleSubjectAttr);
+    if (subject && (!roleSubject || roleSubject.getValue() != *subject))
+      return;
+    auto group = store->getAttrOfType<StringAttr>(kOperationGroupRefAttr);
+    auto partition = store->getAttrOfType<StringAttr>(
+        kUnrollPartitionLineageAttr);
+    if (!group || (partition && partition.getValue() == "tail"))
+      return;
+    StoreGroupKey key{store->getBlock(), group.getValue().str()};
+    auto [position, inserted] = storeGroups.try_emplace(key);
+    if (inserted)
+      storeOrder.push_back(key);
+    position->second.push_back(store);
+  });
+
   int64_t groupedLoadCount = 0;
   for (Block *block : blocks) {
     auto &groups = groupsByBlock[block];
-    SmallVector<int64_t> ordinals;
-    for (auto &entry : groups)
-      ordinals.push_back(entry.first);
-    llvm::sort(ordinals);
-    for (int64_t ordinal : ordinals) {
-      SmallVector<LoadOp> &loads = groups[ordinal];
+    for (auto &entry : groups) {
+      SmallVector<LoadOp> &loads = entry.second;
       if (loads.size() != static_cast<size_t>(unrollFactor))
-        return failure();
+        return reject("existing_loop_load_group_cardinality_differs_from_route_factor");
       llvm::sort(loads, [](LoadOp left, LoadOp right) {
         return left->isBeforeInBlock(right);
       });
@@ -8331,7 +9538,27 @@ LogicalResult materializeOrderPreservingLoadVectorization(
                    load.getEvict() != first.getEvict() ||
                    load.getIsVolatile() != first.getIsVolatile();
           }))
-        return failure();
+        return reject("existing_loop_load_group_memory_semantics_are_not_exactly_packable");
+
+      // The joined load is inserted after the last source-lane load.  It can
+      // therefore replace a source result only when that insertion point
+      // dominates every use of every lane result.  Dependent gather chains
+      // commonly consume an earlier load to construct a later load's pointer;
+      // grouping such a producer would otherwise create use-before-definition
+      // IR.  This is a structural SSA precondition, independent of kernel or
+      // operator identity.  Keep such producer groups scalar and allow later,
+      // independent leaf-load groups to vectorize.
+      Operation *insertionAnchor = loads.back();
+      bool replacementDominatesAllUses = llvm::all_of(loads, [&](LoadOp load) {
+        return llvm::all_of(load.getResult().getUses(), [&](OpOperand &use) {
+          Operation *topLevelUser =
+              block->findAncestorOpInBlock(*use.getOwner());
+          return topLevelUser &&
+                 insertionAnchor->isBeforeInBlock(topLevelUser);
+        });
+      });
+      if (!replacementDominatesAllUses)
+        continue;
 
       OpBuilder builder(loads.back());
       builder.setInsertionPointAfter(loads.back());
@@ -8346,13 +9573,13 @@ LogicalResult materializeOrderPreservingLoadVectorization(
       FailureOr<Value> pointer = joinValues(
           builder, first.getLoc(), pointers);
       if (failed(pointer))
-        return failure();
+        return reject("existing_loop_load_pointer_group_cannot_be_joined_exactly");
       Value mask;
       if (masked) {
         FailureOr<Value> joined = joinValues(
             builder, first.getLoc(), masks);
         if (failed(joined))
-          return failure();
+          return reject("existing_loop_load_mask_group_cannot_be_joined_exactly");
         mask = *joined;
       }
       Value other;
@@ -8360,7 +9587,7 @@ LogicalResult materializeOrderPreservingLoadVectorization(
         FailureOr<Value> joined = joinValues(
             builder, first.getLoc(), others);
         if (failed(joined))
-          return failure();
+          return reject("existing_loop_load_other_group_cannot_be_joined_exactly");
         other = *joined;
       }
       auto grouped = LoadOp::create(
@@ -8375,8 +9602,64 @@ LogicalResult materializeOrderPreservingLoadVectorization(
       ++groupedLoadCount;
     }
   }
-  if (groupedLoadCount == 0)
-    return failure();
+
+  int64_t groupedStoreCount = 0;
+  for (const StoreGroupKey &key : storeOrder) {
+    SmallVector<StoreOp> stores = storeGroups[key];
+    if (stores.size() != static_cast<size_t>(unrollFactor))
+      continue;
+    llvm::sort(stores, [](StoreOp left, StoreOp right) {
+      return left->isBeforeInBlock(right);
+    });
+    StoreOp first = stores.front();
+    if (!isExactPackableMemoryOperation(first))
+      continue;
+    bool masked = static_cast<bool>(first.getMask());
+    if (llvm::any_of(stores, [&](StoreOp store) {
+          return !isExactPackableMemoryOperation(store) ||
+                 store.getPtr().getType() != first.getPtr().getType() ||
+                 store.getValue().getType() != first.getValue().getType() ||
+                 static_cast<bool>(store.getMask()) != masked ||
+                 (masked && store.getMask().getType() !=
+                                first.getMask().getType()) ||
+                 store.getCache() != first.getCache() ||
+                 store.getEvict() != first.getEvict();
+        }))
+      return reject("existing_loop_store_group_memory_semantics_are_not_exactly_packable");
+
+    OpBuilder builder(stores.back());
+    builder.setInsertionPointAfter(stores.back());
+    SmallVector<Value> pointers, values, masks;
+    for (StoreOp store : stores) {
+      pointers.push_back(store.getPtr());
+      values.push_back(store.getValue());
+      if (masked)
+        masks.push_back(store.getMask());
+    }
+    FailureOr<Value> pointer = joinValues(
+        builder, first.getLoc(), pointers);
+    FailureOr<Value> value = joinValues(
+        builder, first.getLoc(), values);
+    if (failed(pointer) || failed(value))
+      return reject("existing_loop_store_pointer_or_value_group_cannot_be_joined_exactly");
+    if (masked) {
+      FailureOr<Value> mask = joinValues(
+          builder, first.getLoc(), masks);
+      if (failed(mask))
+        return reject("existing_loop_store_mask_group_cannot_be_joined_exactly");
+      StoreOp::create(builder, first.getLoc(), *pointer, *value, *mask,
+                      first.getCache(), first.getEvict());
+    } else {
+      StoreOp::create(builder, first.getLoc(), *pointer, *value,
+                      first.getCache(), first.getEvict());
+    }
+    for (StoreOp store : llvm::reverse(stores))
+      store.erase();
+    ++groupedStoreCount;
+  }
+  if (groupedLoadCount == 0 && groupedElementwise == 0 &&
+      groupedStoreCount == 0)
+    return reject("existing_loop_subject_has_no_exactly_packable_operation_group");
 
   SmallVector<Operation *> lineage;
   func.walk([&](Operation *op) {
@@ -8387,6 +9670,14 @@ LogicalResult materializeOrderPreservingLoadVectorization(
     if (!subject || (roleSubject && roleSubject.getValue() == *subject))
       lineage.push_back(op);
   });
+  func.walk([&](Operation *operation) {
+    auto roleSubject = operation->getAttrOfType<StringAttr>(
+        kRoleSubjectAttr);
+    if (subject && (!roleSubject || roleSubject.getValue() != *subject))
+      return;
+    operation->removeAttr(kOperationGroupRefAttr);
+    operation->removeAttr(kUnrollPartitionLineageAttr);
+  });
   clearRoles(lineage);
   int64_t prior = 0;
   if (auto count =
@@ -8395,13 +9686,24 @@ LogicalResult materializeOrderPreservingLoadVectorization(
   func->setAttr(kVectorizedLoadGroupCountAttr,
                 IntegerAttr::get(IntegerType::get(func.getContext(), 64),
                                  prior + groupedLoadCount));
+  if (groupedStoreCount) {
+    int64_t operationPrior = 0;
+    if (auto count = func->getAttrOfType<IntegerAttr>(
+            kVectorizedOperationGroupCountAttr))
+      operationPrior = count.getInt();
+    func->setAttr(
+        kVectorizedOperationGroupCountAttr,
+        IntegerAttr::get(IntegerType::get(func.getContext(), 64),
+                         operationPrior + groupedStoreCount));
+  }
   return success();
 }
 
 LogicalResult materializeLogical(FuncOp func,
                                  std::optional<StringRef> subject = std::nullopt,
                                  int64_t unrollFactor = 4,
-                                 Block *onlyBlock = nullptr) {
+                                 Block *onlyBlock = nullptr,
+                                 std::string *failureReason = nullptr) {
   SmallVector<Operation *> loads, computes, reductions;
   if (!collectRoles(func, loads, computes, reductions, subject))
     return failure();
@@ -8423,8 +9725,8 @@ LogicalResult materializeLogical(FuncOp func,
                isRankOneIntegerVector(op->getResult(0));
       });
   if (!onlyBlock && !narrowIntegerReduction)
-    return materializeOrderPreservingLoadVectorization(
-        func, subject, unrollFactor);
+    return materializeExactOperationVectorization(
+        func, subject, unrollFactor, failureReason);
 
   // Match the native unroller's dynamic main/remainder shape.  Logical lane
   // fusion applies to the factor-wide main block; the scalar tail retains the
@@ -8462,7 +9764,8 @@ LogicalResult materializeLogical(FuncOp func,
           clearRoles(scalarTail);
           continue;
         }
-        if (failed(materializeLogical(func, subject, unrollFactor, block)))
+        if (failed(materializeLogical(
+                func, subject, unrollFactor, block, failureReason)))
           return failure();
       }
       return success();
@@ -8916,6 +10219,8 @@ public:
            dependence.getValue() !=
                "provider_closed_complete_static_nest_v1" &&
            dependence.getValue() !=
+               "provider_closed_operation_neutral_static_nest_v2" &&
+           dependence.getValue() !=
                "independent_iteration_exact_inner_reduction_v1" &&
            !isAffineRuntimeOrderPreservingCertificate(
                dependence.getValue()))) {
@@ -8923,6 +10228,27 @@ public:
                       "unroll materialization lost its iteration-dependence certificate");
         return signalPassFailure();
       }
+    }
+    if (parsed->bridgeOnly) {
+      SmallVector<scf::ForOp> subjects;
+      (*entry).walk([&](scf::ForOp loop) {
+        if (loop->hasAttr(kSubjectAttr))
+          subjects.push_back(loop);
+      });
+      if (subjects.size() != 1 ||
+          !subjects.front()->hasAttr(kBridgeSubjectAttr) ||
+          subjects.front()->hasAttr("tt.loop_unroll_factor") ||
+          subjects.front()->hasAttr("tt.num_stages")) {
+        reportFailure(
+            module,
+            "Bridge-only arm acquired a route-local transformation request");
+        return signalPassFailure();
+      }
+      (*entry)->setAttr(kRealizedAttr,
+                        builder.getStringAttr("bridge_only"));
+      (*entry)->setAttr(kPostconditionAttr,
+                        builder.getStringAttr("pass"));
+      return;
     }
     if (parsed->affineRuntimePartial) {
       SmallVector<scf::ForOp> subjects;
@@ -9021,13 +10347,28 @@ public:
         if (loop->hasAttr(kSubjectAttr))
           subjects.push_back(loop);
       });
-      auto stages = subjects.size() == 1
-                        ? subjects.front()->getAttrOfType<IntegerAttr>("tt.num_stages")
-                        : IntegerAttr();
-      if (subjects.size() != 1 || !stages ||
-          stages.getInt() != parsed->stageCount) {
+      const size_t expectedSubjects =
+          parsed->providerBoundPipelineSubjectSet
+              ? parsed->providerBoundMembers.size()
+              : 1;
+      std::set<std::string> realizedMembers;
+      bool stagesMatch = subjects.size() == expectedSubjects;
+      for (scf::ForOp subject : subjects) {
+        auto stages =
+            subject->getAttrOfType<IntegerAttr>("tt.num_stages");
+        stagesMatch &= stages && stages.getInt() == parsed->stageCount;
+        if (auto role =
+                subject->getAttrOfType<StringAttr>(kPipelineMemberRefAttr))
+          realizedMembers.insert(role.getValue().str());
+      }
+      bool membersMatch = !parsed->providerBoundPipelineSubjectSet ||
+          (realizedMembers.size() == parsed->providerBoundMembers.size() &&
+           llvm::all_of(parsed->providerBoundMembers, [&](const auto &member) {
+             return realizedMembers.count(member.memberRef) != 0;
+           }));
+      if (!stagesMatch || !membersMatch) {
         reportFailure(module,
-                      "native pipeline subject or resolved stage request was not preserved");
+                      "native pipeline member set or shared stage request was not preserved");
         return signalPassFailure();
       }
       (*entry)->setAttr(kRealizedAttr, builder.getStringAttr("software_pipeline"));
@@ -9042,16 +10383,20 @@ public:
         hadStaticMainPartitionLineage |= partition.getValue() == "main";
         hadStaticTailPartitionLineage |= partition.getValue() == "tail";
       });
+      std::string materializationReason;
       bool materialized = parsed->runtimeGuardedLogical
                               ? succeeded(materializeRuntimeGuardedLogical(*entry))
                           : parsed->bridgeConstructed && parsed->route == kPhaseRoute
-                              ? succeeded(materializeBridgePhase(*entry))
+                              ? succeeded(materializeBridgePhase(
+                                    *entry, /*clearLineage=*/true,
+                                    &materializationReason))
                           : parsed->bridgeConstructed && parsed->route == kLogicalRoute
                               ? succeeded(materializeBridgeLogical(
                                     *entry, parsed->unrollFactor,
                                     parsed->bridgeInvariantHoisting,
                                     parsed->bridgeTensorLaneFusion,
-                                    parsed->bridgeExactSplitElision))
+                                    parsed->bridgeExactSplitElision,
+                                    &materializationReason))
                           : [&]() {
                               auto subjects = collectRoleSubjects(*entry);
                               if (subjects.empty())
@@ -9072,29 +10417,24 @@ public:
                                     return false;
                                   subjectFactor = member->routeFactor;
                                 }
-                                bool coarseOrderPreserving =
-                                    dependence &&
-                                    (dependence.getValue() ==
-                                         "existing_order_preserving_read_exposure_v1" ||
-                                     dependence.getValue() ==
-                                         "existing_affine_pointer_read_exposure_v1" ||
-                                     dependence.getValue() ==
-                                         "per_loop_order_preserving_read_exposure_v1");
                                 LogicalResult result = parsed->route == kPhaseRoute
-                                    ? materializePhase(
-                                          *entry, filter,
-                                          parsed->providerClosedStatic ||
-                                              coarseOrderPreserving,
-                                          subjectFactor)
+                                    ? materializeOperationNeutralPhase(
+                                          *entry, filter)
                                     : materializeLogical(
-                                          *entry, filter, subjectFactor);
+                                          *entry, filter, subjectFactor,
+                                          /*onlyBlock=*/nullptr,
+                                          &materializationReason);
                                 if (failed(result))
                                   return false;
                               }
                               return true;
                             }();
       if (!materialized) {
-        reportFailure(module, "full-unroll clone lineage cannot realize the selected Loop route");
+        std::string reason =
+            "full-unroll clone lineage cannot realize the selected Loop route";
+        if (!materializationReason.empty())
+          reason += ": " + materializationReason;
+        reportFailure(module, reason);
         return signalPassFailure();
       }
       if (parsed->providerBoundSubjectSet)
@@ -9281,6 +10621,8 @@ public:
           dependence.getValue() !=
               "provider_closed_complete_static_nest_v1" &&
           dependence.getValue() !=
+              "provider_closed_operation_neutral_static_nest_v2" &&
+          dependence.getValue() !=
               "independent_iteration_exact_inner_reduction_v1" &&
           !isAffineRuntimeOrderPreservingCertificate(
               dependence.getValue())))) {
@@ -9358,14 +10700,48 @@ public:
       }
       return;
     }
+    if (parsed->bridgeOnly) {
+      SmallVector<scf::ForOp> subjects;
+      (*entry).walk([&](scf::ForOp loop) {
+        if (loop->hasAttr(kSubjectAttr))
+          subjects.push_back(loop);
+      });
+      if (subjects.size() != 1 ||
+          !subjects.front()->hasAttr(kBridgeSubjectAttr) ||
+          subjects.front()->hasAttr("tt.loop_unroll_factor") ||
+          subjects.front()->hasAttr("tt.num_stages") ||
+          realized.getValue() != "bridge_only") {
+        reportFailure(
+            module,
+            "Bridge-only postcondition lost the unmodified Bridge subject");
+        return signalPassFailure();
+      }
+      return;
+    }
     if (parsed->route == kPipelineRoute) {
       SmallVector<scf::ForOp> subjects;
       (*entry).walk([&](scf::ForOp loop) {
         if (loop->hasAttr(kSubjectAttr))
           subjects.push_back(loop);
       });
-      if (subjects.size() != 1 || realized.getValue() != "software_pipeline") {
-        reportFailure(module, "pipeline route lost its live focal subject");
+      const size_t expectedSubjects =
+          parsed->providerBoundPipelineSubjectSet
+              ? parsed->providerBoundMembers.size()
+              : 1;
+      std::set<std::string> realizedMembers;
+      for (scf::ForOp loop : subjects)
+        if (auto role =
+                loop->getAttrOfType<StringAttr>(kPipelineMemberRefAttr))
+          realizedMembers.insert(role.getValue().str());
+      bool membersMatch = !parsed->providerBoundPipelineSubjectSet ||
+          (realizedMembers.size() == parsed->providerBoundMembers.size() &&
+           llvm::all_of(parsed->providerBoundMembers, [&](const auto &member) {
+             return realizedMembers.count(member.memberRef) != 0;
+           }));
+      if (subjects.size() != expectedSubjects || !membersMatch ||
+          realized.getValue() != "software_pipeline") {
+        reportFailure(module,
+                      "pipeline route lost its exact live subject set");
         return signalPassFailure();
       }
       return;
@@ -9436,6 +10812,8 @@ public:
       unsigned bridgeJoins = 0;
       auto vectorizedLoadGroups = (*entry)->getAttrOfType<IntegerAttr>(
           kVectorizedLoadGroupCountAttr);
+      auto vectorizedOperationGroups = (*entry)->getAttrOfType<IntegerAttr>(
+          kVectorizedOperationGroupCountAttr);
       (*entry).walk([&](JoinOp) { ++bridgeJoins; });
       (*entry).walk([&](ReduceOp reduce) {
         if (parsed->runtimeGuardedLogical)
@@ -9504,15 +10882,28 @@ public:
                      vectorizedLoadGroups.getInt() >=
                          static_cast<int64_t>(
                              parsed->providerBoundMembers.size()) &&
+                     bridgeJoins > 0) ||
+                    (vectorizedOperationGroups &&
+                     vectorizedOperationGroups.getInt() >=
+                         static_cast<int64_t>(
+                             parsed->providerBoundMembers.size()) &&
                      bridgeJoins > 0)
               : logicalReductions >= 1 ||
                     (vectorizedLoadGroups &&
-                     vectorizedLoadGroups.getInt() > 0 && bridgeJoins > 0);
+                     vectorizedLoadGroups.getInt() > 0 && bridgeJoins > 0) ||
+                    (vectorizedOperationGroups &&
+                     vectorizedOperationGroups.getInt() > 0 &&
+                     bridgeJoins > 0);
       if (!logicalPostcondition || realized.getValue() != expectedRealized) {
         reportFailure(module, "logical-group materialization postcondition failed");
         return signalPassFailure();
       }
-    } else if (realized.getValue() !=
+    } else {
+      auto operationGroups = (*entry)->getAttrOfType<IntegerAttr>(
+          kPhaseOperationGroupCountAttr);
+      bool operationGroupIdentity =
+          operationGroups && operationGroups.getInt() > 0;
+      if (!operationGroupIdentity || realized.getValue() !=
                (factorMainTail
                     ? "phase_major_factor_main_tail"
                 : parsed->bridgeConstructed
@@ -9520,8 +10911,9 @@ public:
                 : parsed->providerClosedStatic
                     ? "phase_major_provider_closed"
                     : "phase_major")) {
-      reportFailure(module, "phase-major postcondition failed");
-      return signalPassFailure();
+        reportFailure(module, "phase-major postcondition failed");
+        return signalPassFailure();
+      }
     }
   }
 };

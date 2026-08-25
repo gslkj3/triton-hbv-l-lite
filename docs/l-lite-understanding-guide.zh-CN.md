@@ -65,7 +65,7 @@ L-lite 只负责发现、绑定、合法性检查和最终物化事实验证。
 六个编译阶段的 pass 名称在
 [`Passes.td`](../include/triton/Dialect/Triton/Transforms/Passes.td#L93-L125)；
 route 虽共享 `triton-hbv-loop-materialize` 外壳，但在
-[`HBVLoopMaterializePass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L8805-L9154)
+[`HBVLoopMaterializePass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L10108)
 中分派给不同 materializer。
 
 ## 3. 公共入口：事实、合法性、物化和后置验证
@@ -153,11 +153,11 @@ program body；原始 program-id 的使用被替换为当前循环迭代对应�
 - 若继续执行 route，最终同时保留 Bridge factor 和 route factor 的独立身份。
 
 **对应代码：** 只读发现由
-[`LoopBridgeDiscoverPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L4573-L4692)
+[`LoopBridgeDiscoverPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L4993)
 实现，program 间地址独立性由
-[`certifyBridgeProgramIndependence`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L1886-L1996)
+[`certifyBridgeProgramIndependence`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L2152)
 证明，实际改写入口是
-[`LoopBridgeProgramCoarseningPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L5727-L6498)。
+[`LoopBridgeProgramCoarseningPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6191)。
 Python 侧用
 [`route_subject_after_bridge_v1`](../python/triton/l_lite/factor_ontology.py#L414-L437)
 表达“Bridge 只产生 subject、不导入 route 语义”。
@@ -190,9 +190,9 @@ grid，再在新循环中恢复每个逻辑 program-id。动态 launch 标量只
 事实绑定，不作为性能特征。
 
 **对应代码：** runtime 标量和 grid extent 的事实绑定在
-[`LoopBridgeDiscoverPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L4588-L4657)；
+[`LoopBridgeDiscoverPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L4993)；
 单轴 program loop 的构造、克隆和 lineage 写入在
-[`LoopBridgeProgramCoarseningPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6294-L6498)。
+[`LoopBridgeProgramCoarseningPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6191)。
 最小编译检查见
 [`hbv-loop-bridge-scan.mlir`](../test/Triton/hbv-loop-bridge-scan.mlir#L1-L27)。
 
@@ -209,9 +209,9 @@ program，破坏后续逻辑 program 的执行。
 嵌套控制流时拒绝；不会针对某个函数名写特殊分支。
 
 **对应代码：** 允许的 continuation 操作规则在
-[`continuationOperationIsPredicatable`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L374-L388)，
+[`continuationOperationIsPredicatable`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L410)，
 CFG 识别和谓词化改写在
-[`normalizeSingleEarlyVoidReturnCFG`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L404-L532)，
+[`normalizeSingleEarlyVoidReturnCFG`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L570)，
 正反例测试在
 [`hbv-loop-bridge-early-return.mlir`](../test/Triton/hbv-loop-bridge-early-return.mlir#L1-L58)。
 
@@ -230,9 +230,9 @@ divisor 向量，materializer 用 mixed-radix 方式恢复各轴逻辑 id。向�
 **对应代码：** 多轴 subject 的不可变语义和乘积校验在
 [`LoopBridgeAxisVectorSubjectV1`](../python/triton/l_lite/factor_ontology.py#L356-L412)；
 divisor 解析、逐轴证明和 mixed-radix body 克隆在
-[`LoopBridgeProgramCoarseningPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L5733-L6051)；
+[`LoopBridgeProgramCoarseningPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6191)；
 Plan 决策阶段重新核对完整 divisor 向量在
-[`HBVLoopDecisionPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6883-L6918)。
+[`HBVLoopDecisionPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L7210)。
 
 ### 4.8 子域 A4：连续分区递推
 
@@ -247,12 +247,12 @@ subject 状态，不等同于 route 的重排或向量化机制。
 本身不合法时类型化拒绝。
 
 **对应代码：** 分区模式发现由
-[`findDirectPidPartition`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L1998-L2070)
+[`findDirectPidPartition`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L2277)
 完成；Bridge 在 CFG/单轴路径中分别重验并物化该递推，入口见
-[`LoopBridgeProgramCoarseningPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6091-L6258)
+[`LoopBridgeProgramCoarseningPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6191)
 和[普通单轴分支](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6330-L6498)；
 决策阶段的证书复核见
-[`HBVLoopDecisionPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6857-L6882)。
+[`HBVLoopDecisionPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L7210)。
 
 ## 5. 因果域 B：原生软件流水 route
 
@@ -283,9 +283,9 @@ stage count 与 Bridge factor 独立。例如 Bridge 构造 4 次循环，并不
 软件流水 factor 不受 subject trip 限制的准入分支在
 [`decide_loop_route_factor_admission_v1`](../python/triton/l_lite/factor_ontology.py#L493-L579)；
 决策 pass 只写入原生 `tt.num_stages` 在
-[`HBVLoopDecisionPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6926-L6936)，
+[`HBVLoopDecisionPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L7210)，
 物化阶段不重写算法、只核对请求仍存在于唯一 subject 在
-[`HBVLoopMaterializePass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9018-L9034)。
+[`HBVLoopMaterializePass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L10108)。
 
 ### 5.4 子域 B1：已有循环的软件流水
 
@@ -299,7 +299,7 @@ stage count 与 Bridge factor 独立。例如 Bridge 构造 4 次循环，并不
 **对应代码：** 每个可观测循环的 native pipeline 能力及另两条 route 覆盖矩阵由
 [`_build_loop_mechanism_coverage_v1`](../python/triton/l_lite/autotune.py#L54-L144)
 投影；最终必须保持唯一 software-pipeline subject 的验证在
-[`HBVValidateLoopPlanPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9359-L9371)。
+[`HBVValidateLoopPlanPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L10496)。
 
 ### 5.5 子域 B2：Bridge 构造循环的软件流水
 
@@ -314,11 +314,11 @@ reduction/间接地址或嵌套区域，原生 pipeline 可能合法地拒绝。
 区分“Bridge 没有暴露普通循环结构”和“循环本身没有可流水机制”。
 
 **对应代码：** Bridge 为下游 route 暴露 body 的 CFG 正规化注释和实现见
-[`normalizeSingleEarlyVoidReturnCFG`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L390-L532)；
+[`normalizeSingleEarlyVoidReturnCFG`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L570)；
 Bridge 物化后生成的 loop subject 在
-[`LoopBridgeProgramCoarseningPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6429-L6498)，
+[`LoopBridgeProgramCoarseningPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6191)，
 decision 随后把该 subject 绑定为 pipeline focal loop 在
-[`HBVLoopDecisionPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6837-L6953)。
+[`HBVLoopDecisionPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L7210)。
 
 ### 5.6 子域 B3：嵌套循环的软件流水
 
@@ -378,11 +378,11 @@ route factor 是“本组完整展开并重排的宽度”。当 factor 等于�
 **对应代码：** route factor 的 main/tail 守恒、完整消除条件和 typed reason 在
 [`decide_loop_route_factor_admission_v1`](../python/triton/l_lite/factor_ontology.py#L493-L579)；
 一般 phase-major 重排由
-[`materializePhase`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L7489-L7753)
+[`materializePhase`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L8320)
 实现；统一分派及失败即停止在
-[`HBVLoopMaterializePass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9045-L9099)；
+[`HBVLoopMaterializePass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L10108)；
 最终检查 phase-major postcondition 在
-[`HBVValidateLoopPlanPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9515-L9523)。
+[`HBVValidateLoopPlanPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L10496)。
 
 ### 6.4 子域 C1：已有精确静态循环
 
@@ -396,9 +396,9 @@ route factor 是“本组完整展开并重排的宽度”。当 factor 等于�
 **对应代码：** 静态 subject 的 main/tail 计算在
 [`decide_loop_route_factor_admission_v1`](../python/triton/l_lite/factor_ontology.py#L529-L579)；
 decision 给目标循环写入 unroll factor、保持 subject identity 的主体在
-[`HBVLoopDecisionPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L7135-L7345)，
+[`HBVLoopDecisionPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L7210)，
 最终 main/tail lineage 的判定在
-[`HBVLoopMaterializePass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9105-L9146)。
+[`HBVLoopMaterializePass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L10108)。
 
 ### 6.5 子域 C2：有证书的动态主尾循环
 
@@ -414,13 +414,13 @@ group，并让 tail 继续保持原始语义。没有 runtime main-tail certific
 **对应代码：** 无动态证书即拒绝的本体规则在
 [`decide_loop_route_factor_admission_v1`](../python/triton/l_lite/factor_ontology.py#L554-L579)；
 仿射动态顺序证书由
-[`certifyAffineRuntimeOrderPreserving`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L4502-L4571)
+[`certifyAffineRuntimeOrderPreserving`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L4910)
 生成；两种物化路径分别是
-[`materializeAffineRuntimePartialUnroll`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L8595-L8662)
+[`materializeAffineRuntimePartialUnroll`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9898)
 和
-[`materializeAffineRuntimeMainTail`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L8664-L8803)，
+[`materializeAffineRuntimeMainTail`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9967)，
 其选择及后置检查见
-[`HBVLoopMaterializePass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L8927-L9017)。
+[`HBVLoopMaterializePass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L10108)。
 
 ### 6.6 子域 C3：Bridge 构造 subject
 
@@ -437,9 +437,9 @@ factor 在语义上相同。
 **对应代码：** Bridge→route V2 合法性和 factor 的独立 owner 在
 [`certify_loop_bridge_route_composition_v2`](../python/triton/l_lite/contract.py#L173-L241)；
 helper 展开由
-[`inlineBridgeHelpers`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L7882-L7969)
+[`inlineBridgeHelpers`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L8800)
 负责，Bridge 专属 phase-major 重排由
-[`materializeBridgePhase`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L7757-L7880)
+[`materializeBridgePhase`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L8622)
 负责。当前等式限制有单独测试，见
 [`test_full_unroll_equality_is_a_typed_materializer_limit`](../python/test/unit/l_lite/test_control.py#L60-L72)。
 
@@ -462,7 +462,7 @@ mask 指明所选结构范围。对 phase-major route，route factor 必须等�
 phase factor 必须等于 scope cardinality 的规则在
 [`decide_loop_nested_route_factor_admission_v1`](../python/triton/l_lite/factor_ontology.py#L781-L836)。
 C++ 对完整静态 nest 的逐层绑定在
-[`HBVLoopDecisionPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6955-L7047)。
+[`HBVLoopDecisionPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L7210)。
 
 ### 6.8 子域 C5：Provider 绑定的多 subject / 嵌套叶子
 
@@ -477,11 +477,11 @@ factor、能力证书及父子关系。物化后必须逐成员核对 identity�
 
 **对应代码：** `ParsedLoopPlan::ProviderBoundMember` 保存 locator、父子、嵌套证书和
 成员 factor，定义在
-[`HBVLoop.cpp`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L166-L176)；
+[`HBVLoop.cpp`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L144)；
 嵌套叶子独立性由
-[`certifyNestedInnerDimension`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6586-L6623)
+[`certifyNestedInnerDimension`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L7071)
 重验；逐 member 选择自己的 route factor 并调用相同因果域 materializer 在
-[`HBVLoopMaterializePass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9055-L9095)。
+[`HBVLoopMaterializePass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L10108)。
 
 ## 7. 因果域 D：完全展开 + logical-group 向量化
 
@@ -500,18 +500,20 @@ factor、能力证书及父子关系。物化后必须逐成员核对 identity�
 
 Provider 证明组成员在形状、类型、操作图、依赖和副作用上可共同执行。materializer
 完整展开目标范围，收集同一逻辑位置的值，使用 join/reshape/broadcast/reduce 等
-TTIR 结构形成组，再把结果正确拆回各自消费者。最终验证要求看到 logical-group
-归约、向量化 load group、state-axis packed graph 或对应子域的专属 artifact；只
-展开而没有形成组不算成功。
+TTIR 结构形成组，再把结果正确拆回各自消费者。准入不要求固定的
+“一个 load + 一个 store”操作配方：load、store 和满足同构/依赖/副作用约束的
+elementwise 组分别使用自己的等价性规则。最终验证要求看到 logical-group
+归约、精确打包 operation group、state-axis packed graph 或对应子域的专属
+artifact；只展开而没有形成组不算成功。
 
 **对应代码：** logical route 的两种顶层 subtype 在
 [`LoopLogicalVectorSubtypeMeaningV1`](../python/triton/l_lite/factor_ontology.py#L105-L158)
 中定义；一般已有循环的物化入口是
-[`materializeLogical`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L8401-L8521)，
-顺序保持的 load 向量化在
-[`materializeOrderPreservingLoadVectorization`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L8234-L8399)，
+[`materializeLogical`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9702)，
+已有循环中按源 operation-group 身份进行精确打包的实现是
+[`materializeExactOperationVectorization`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9413)，
 最终 logical artifact 检查在
-[`HBVValidateLoopPlanPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9438-L9513)。
+[`HBVValidateLoopPlanPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L10496)。
 
 ### 7.4 子域 D1：普通 grouped-load / grouped-iteration
 
@@ -530,7 +532,7 @@ subject 必须带主尾证书。整组被展开后，编译器检查至少一个
 factor 合法性在
 [`decide_loop_route_factor_admission_v1`](../python/triton/l_lite/factor_ontology.py#L518-L579)；
 一般 logical materializer 及“没有真实 reduction/load group 即失败”的逻辑在
-[`materializeLogical`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L8401-L8521)。
+[`materializeLogical`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9702)。
 
 ### 7.5 子域 D2：Bridge factorized logical group
 
@@ -546,11 +548,11 @@ program 同构节点、hoist 与当前 program ordinal 无关的值，并合并 
 
 **对应代码：** Bridge logical 的完整实现及 factor、hoisting、lane fusion、split
 elision 参数在
-[`materializeBridgeLogical`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L7971-L8221)；
+[`materializeBridgeLogical`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9114)；
 物化后的 `logical_group_bridge` / `factorized_bridge_GH/GF/GHF` identity 分支在
-[`HBVLoopMaterializePass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9124-L9145)，
+[`HBVLoopMaterializePass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L10108)，
 最终按实际 join 和 reduction 计数验收在
-[`HBVValidateLoopPlanPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9467-L9513)。
+[`HBVValidateLoopPlanPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L10496)。
 
 ### 7.6 子域 D3：动态主尾 logical group
 
@@ -568,9 +570,9 @@ group，tail 走有序标量/原循环路径。若 guard、mask 或 tail identit
 及
 [`decide_loop_route_factor_admission_v1`](../python/triton/l_lite/factor_ontology.py#L554-L579)；
 full-unroll route 的 main/tail 后置 identity 在
-[`HBVLoopMaterializePass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9105-L9146)
+[`HBVLoopMaterializePass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L10108)
 和
-[`HBVValidateLoopPlanPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9410-L9437)。
+[`HBVValidateLoopPlanPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L10496)。
 
 ### 7.7 子域 D4：exact-prefix 向量化
 
@@ -593,11 +595,11 @@ factor=1 与 subtype/admission 规则在
 它以 direct candidate 加入 autotune、同时将顶层 mechanism 映射回 logical route 在
 [`add_loop_exact_prefix_autotune_candidate_v1`](../python/triton/l_lite/autotune.py#L272-L333)。
 C++ 识别与物化分别在
-[`collectExactPrefixReductions`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L1279-L1286)
+[`collectExactPrefixReductions`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L1523)
 和
-[`materializeExactPrefixReduction`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L1288-L1357)，
+[`materializeExactPrefixReduction`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L1532)，
 最终专属后置条件在
-[`HBVValidateLoopPlanPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9341-L9358)。
+[`HBVValidateLoopPlanPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L10496)。
 
 ### 7.8 子域 D5：sibling state-axis SLP
 
@@ -615,15 +617,15 @@ packed node 和 cross-state consumer 数量，不能依赖 `softmax`、`sinkhorn
 kernel 名准入。
 
 **对应代码：** 通用操作能力谓词从
-[`isStateAxisElementwiseCapability`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L1359-L1386)
+[`isStateAxisElementwiseCapability`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L1603)
 开始，结构发现由
-[`collectStateAxisNormalizations`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L1591-L1627)
+[`collectStateAxisNormalizations`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L1835)
 完成，实际 stack/reshape/逐节点打包在
-[`materializeStateAxisNormalization`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L1829-L1884)；
+[`materializeStateAxisNormalization`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L2073)；
 decision 逐组复核 Provider graph 在
-[`HBVLoopDecisionPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6771-L6804)，
+[`HBVLoopDecisionPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L7210)，
 最终以精确节点计数闭合在
-[`HBVValidateLoopPlanPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9291-L9340)。
+[`HBVValidateLoopPlanPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L10496)。
 
 ### 7.9 子域 D6：嵌套 subject 的 logical group
 
@@ -641,7 +643,7 @@ decision 逐组复核 Provider graph 在
 logical factor 的幂次和上限规则在
 [`decide_loop_nested_route_factor_admission_v1`](../python/triton/l_lite/factor_ontology.py#L781-L836)；
 叶子循环的直接依赖证明在
-[`certifyNestedInnerDimension`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L6586-L6623)。
+[`certifyNestedInnerDimension`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L7071)。
 
 ## 8. 联合优化如何成立，而不混合因果域
 
@@ -707,7 +709,7 @@ kernel 都已经闭环。对一个具体子域，应分别检查：
 **对应代码：** 最终 C++ validator 会拒绝残留的临时 lineage、route/subject/artifact
 不对应、Bridge 与 route factor 丢失，以及“pass 返回成功但目标 artifact 不存在”，
 总入口是
-[`HBVValidateLoopPlanPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L9156-L9525)。
+[`HBVValidateLoopPlanPass`](../lib/Dialect/Triton/Transforms/HBVLoop.cpp#L10496)。
 原生 autotune 控制器不安装 prune callback 或 perf model，见
 [`LoopNativeAutotuneControlV1`](../python/triton/l_lite/autotune.py#L487-L592)
 和

@@ -48,6 +48,41 @@ Key locations:
 - `python/test/unit/l_lite/test_control.py`: offline Cartesian-domain and
   native-autotune behavior tests.
 
+## Current capability release
+
+The current release synchronizes the compiler-side legality, materialization
+and final-artifact checks used by the corresponding main research
+implementation, while retaining L-lite's independent exhaustive-autotune
+selector.  In particular:
+
+- Bridge footprint proofs preserve static local loop/range intervals instead
+  of treating them as zero-width translations;
+- recursively effect-owning structural containers and one-level proven-pure
+  helper calls have explicit positive and negative boundaries;
+- native software-pipeline admission requires a native-visible asynchronous
+  load service with a sufficient payload-width lower bound;
+- phase-major reordering is operation-neutral and preserves source operation
+  order from lineage rather than requiring a particular load/store mixture;
+- logical-group materialization uses separate exact equivalence rules for
+  load, store and general elementwise groups; no fixed operator recipe is an
+  admission condition;
+- structured Bridge conditionals are normalized once as a shared subject
+  capability before route-specific materialization.
+
+The repository contains no workload-name allowlist, kernel-name adapter,
+private experiment ledger, performance predictor, fitted coefficient,
+residual or release selector.  Performance remains an outcome of native
+autotune and is intentionally not claimed by the capability tests.
+
+For an editable source checkout, install the package once so Triton's standard
+backend links are created, then build with the normal Triton backend set.  The
+capability regression used for this release builds `libtriton.so` and
+`triton-opt`, runs `python/test/unit/l_lite/test_control.py`, and runs every
+`test/Triton/hbv-loop-*.mlir` test.  CUDA tool binaries may be supplied through
+the standard `TRITON_PTXAS_PATH`, `TRITON_CUOBJDUMP_PATH` and
+`TRITON_NVDISASM_PATH` environment variables; they are not stored in this
+repository.
+
 The original Triton README follows.
 
 ---
