@@ -1019,7 +1019,48 @@ FlagGems 与 FlagGems-vLLM（面向大模型推理的算子集合）的完整 V2
 
 这里的“加速”是同一请求中最终候选相对 Original 候选的中位时间比，是点估计，不是主 L
 所要求的收益下界证书。18 个配对节点中有 12 个没有产生 L-lite 内核请求；它们只能说明
-当前调用路径没有进入候选编译器，不能记作“已经优化但收益为零”。
+当前调用路径没有进入候选编译器，不能记作“已经优化但收益为零”，也不能自动解释成
+“内核没有可观测循环”。
+
+#### 零请求不等于没有可优化循环
+
+后续卷积节点揭示了一个通用工程覆盖缺口。FlagGems 的许多 Triton 内核不是直接以
+JITFunction（即时编译函数）暴露，而是使用以下复合接口：
+
+```text
+LibEntry（FlagGems 库入口与缓存层）
+→ Autotuner（原生自动调优层）
+→ JITFunction（Triton 即时编译函数）
+```
+
+当前 L-lite pytest（Python 测试框架）插件虽然从 launch registry（启动注册表）中看到了这些
+符号，但只包装“最外层对象直接提供 `bind_hbv_auto_loop`（绑定 HBV 自动循环计划）”的对象。
+`LibEntry` 和它包裹的原生 `Autotuner` 都没有暴露这个接口，更深层的 `JITFunction` 才具有
+相应编译能力。因此这些符号在发现阶段被跳过，测试可以正常运行原生 FlagGems 内核，但
+不会形成 L-lite 请求。
+
+这不是“卷积没有循环”的合法性结论，而是 L-lite 尚未支持复合 KernelInterface（内核调用
+接口）的工程缺口。证据包括：
+
+- `conv2d_forward_kernel` 和 `conv3d_forward_kernel` 都已列入注册表，源码装饰器均为
+  `LibEntry → triton.autotune → triton.jit`；
+- `conv3d` 的 Original 与 L-lite 冷缓存都生成了 363 份
+  `conv3d_forward_kernel` 编译源产物，证明 L-lite 角色确实运行了原生 Triton 内核；
+- 但两个 `conv3d` 测试的 L-lite 请求数仍为 0，证明模块级替换没有进入该复合接口内部；
+- `conv1d` 和 `_conv_depthwise2d` 最终复用 `conv2d`，所以它们的零请求来自同一个接口缺口，
+  不是两个新的算子特例。
+
+静态审计也表明这不是小范围问题：当前 FlagGems 启动注册表包含 2656 个条目，其中 2550 个
+能够对应到源码函数，1763 个函数带有 `@libentry` 装饰器，分布于 651 个源文件。这个数字只
+表示潜在受影响的注册符号，不表示它们都会在当前测试 corpus（语料集合）中执行；但它足以
+说明必须实现一套保持 `LibEntry` 缓存、原生配置选择、heuristics（启发式参数）和 pre-hook
+（执行前钩子）语义的通用 adapter（适配器），不能逐算子绕过外层接口。
+
+在该适配器完成并重新运行之前，V20 中的零请求节点只能作为“修复前接口覆盖审计”。已经
+完整进入 L-lite 候选编译器的请求，其候选正确性和点收益仍可保留；但 V20 不能据此宣称
+完成整个 FlagGems 库的候选覆盖，也不能把卷积节点写成 Route 不适用。修复后的版本必须
+重新采集这些节点，报告“实际 Triton 调用数 → 注册表匹配数 → 复合接口适配数 → L-lite 请求
+数 → Original-only 或多候选结果”的逐级漏斗。
 
 #### 当前已经获得正向点收益的算子
 
