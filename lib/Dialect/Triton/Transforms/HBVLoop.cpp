@@ -428,20 +428,19 @@ bool continuationOperationIsPredicatable(Operation *operation) {
   return isSpeculatable(operation);
 }
 
-// Convert a result-free structured conditional inside one Bridge clone into
-// straight-line, predicated service.  This is deliberately an IR rule rather
-// than an operator adapter: every nested branch must be argument-free, return
-// no SSA result, contain only recursively predicatable computation and expose
-// all memory effects as Triton loads/stores.  The branch predicates are folded
-// into those effects before the regions are inlined.  Consequently the
-// phase-major materializer can see real top-level load/store roots without
-// speculating an observable effect from the inactive branch.
+// Convert a structured conditional inside one Bridge clone into straight-line,
+// predicated service.  This is deliberately an IR rule rather than an operator
+// adapter: every nested branch must be argument-free, contain only recursively
+// predicatable computation and expose all memory effects as Triton loads/stores.
+// Result-bearing branches are legal when both yielded SSA alternatives are
+// closed by that proof; an arith.select preserves the original scf.if result.
+// The branch predicates are folded into memory effects before the regions are
+// inlined.  Consequently the phase-major and logical materializers can see
+// real top-level service roots without speculating an observable inactive
+// effect, including the common "conditionally adjust a value, then consume it"
+// structure.
 LogicalResult predicateAndInlineBridgeIf(scf::IfOp ifOp, int64_t ordinal,
                                          std::string &failureReason) {
-  if (ifOp.getNumResults() != 0) {
-    failureReason = "structured_if_has_escaping_results";
-    return failure();
-  }
   std::string groupPrefix =
       ifOp->getAttrOfType<StringAttr>(kBridgeGroupRefAttr)
           ? ifOp->getAttrOfType<StringAttr>(kBridgeGroupRefAttr).getValue().str()
@@ -470,8 +469,12 @@ LogicalResult predicateAndInlineBridgeIf(scf::IfOp ifOp, int64_t ordinal,
       if (failed(predicateAndInlineBridgeIf(child, ordinal, failureReason)))
         return failure();
     auto yield = dyn_cast<scf::YieldOp>(block.getTerminator());
-    if (!yield || yield.getNumOperands() != 0) {
-      failureReason = "structured_if_region_has_nonvoid_yield";
+    if (!yield || yield.getNumOperands() != ifOp.getNumResults() ||
+        llvm::any_of(llvm::zip(yield.getOperands(), ifOp.getResultTypes()),
+                     [](auto pair) {
+                       return std::get<0>(pair).getType() != std::get<1>(pair);
+                     })) {
+      failureReason = "structured_if_region_yield_does_not_match_results";
       return failure();
     }
     for (Operation &operation : block.without_terminator())
@@ -494,11 +497,12 @@ LogicalResult predicateAndInlineBridgeIf(scf::IfOp ifOp, int64_t ordinal,
       builder, ifOp.getLoc(), builder.getBoolAttr(true));
   Value inverse = arith::XOrIOp::create(
       builder, ifOp.getLoc(), condition, one);
-  auto inlineRegion = [&](Region &region, Value active) {
+  auto inlineRegion = [&](Region &region, Value active) -> SmallVector<Value> {
     if (region.empty())
-      return;
+      return {};
     Block &source = region.front();
-    Operation *yield = source.getTerminator();
+    auto yield = cast<scf::YieldOp>(source.getTerminator());
+    SmallVector<Value> yielded(yield.getOperands());
     for (Operation &operation : source.without_terminator()) {
       IRRewriter rewriter(&operation);
       if (auto load = dyn_cast<LoadOp>(operation)) {
@@ -516,7 +520,7 @@ LogicalResult predicateAndInlineBridgeIf(scf::IfOp ifOp, int64_t ordinal,
       moved.push_back(&operation);
     ifOp->getBlock()->getOperations().splice(
         Block::iterator(ifOp), source.getOperations(), source.begin(),
-        Block::iterator(yield));
+        Block::iterator(yield.getOperation()));
     // Assign service roles only after moving the complete range.  Predicate
     // construction operations are ordinary untagged SSA dependencies of the
     // source operation that consumes them; they must not invent a new source
@@ -532,9 +536,27 @@ LogicalResult predicateAndInlineBridgeIf(scf::IfOp ifOp, int64_t ordinal,
       operation->setAttr(kBridgeOrdinalAttr,
                          builder.getI32IntegerAttr(ordinal));
     }
+    return yielded;
   };
-  inlineRegion(ifOp.getThenRegion(), condition);
-  inlineRegion(ifOp.getElseRegion(), inverse);
+  SmallVector<Value> thenValues =
+      inlineRegion(ifOp.getThenRegion(), condition);
+  SmallVector<Value> elseValues =
+      inlineRegion(ifOp.getElseRegion(), inverse);
+  for (auto [index, pair] : llvm::enumerate(
+           llvm::zip(thenValues, elseValues))) {
+    Value selected = arith::SelectOp::create(
+        builder, ifOp.getLoc(), condition,
+        std::get<0>(pair), std::get<1>(pair));
+    Operation *select = selected.getDefiningOp();
+    select->setAttr(
+        kBridgeGroupRefAttr,
+        builder.getStringAttr(
+            (Twine(groupPrefix) + "/merge:" + Twine(index)).str()));
+    select->setAttr(kBridgeRoleAttr, builder.getStringAttr("compute"));
+    select->setAttr(kBridgeOrdinalAttr,
+                    builder.getI32IntegerAttr(ordinal));
+    ifOp.getResult(index).replaceAllUsesWith(selected);
+  }
   ifOp.erase();
   return success();
 }
@@ -8720,14 +8742,50 @@ LogicalResult materializeBridgePhase(FuncOp func, bool clearLineage = true,
   SmallVector<SmallVector<Operation *>> orderedGroups;
   SmallVector<std::string> remainingGroups(groupOrder.begin(),
                                             groupOrder.end());
+  // An owned load/other effect from a different source-operation group is a
+  // topological predecessor, not an illegal boundary.  The generic closure
+  // helper rejects every effect because its other callers do not have an
+  // explicit identity set.  Here every Bridge effect is already an owned
+  // tagged root, so defer the dependent group until that predecessor has been
+  // scheduled; still reject an unowned effect exactly as before.
+  auto groupedDependencyClosure = [&]
+      (ArrayRef<Operation *> roots,
+       llvm::SmallPtrSetImpl<Operation *> &closure,
+       bool &pendingOwnedEffect) -> LogicalResult {
+    SmallVector<Operation *> worklist(roots.begin(), roots.end());
+    for (Operation *root : roots)
+      closure.insert(root);
+    while (!worklist.empty()) {
+      Operation *operation = worklist.pop_back_val();
+      for (Value operand : operation->getOperands()) {
+        Operation *definition = operand.getDefiningOp();
+        if (!definition || definition->getBlock() != operation->getBlock() ||
+            scheduled.contains(definition) || closure.contains(definition))
+          continue;
+        if (!isMemoryEffectFree(definition)) {
+          if (!taggedSet.contains(definition))
+            return failure();
+          pendingOwnedEffect = true;
+          continue;
+        }
+        closure.insert(definition);
+        worklist.push_back(definition);
+      }
+    }
+    return success();
+  };
   while (!remainingGroups.empty()) {
     bool selectedReadyGroup = false;
     for (size_t index = 0; index < remainingGroups.size(); ++index) {
       const std::string &group = remainingGroups[index];
       llvm::SmallPtrSet<Operation *, 32> closure;
-      if (failed(dependencyClosure(rootsByGroup[group], scheduled, closure)))
+      bool pendingOwnedEffect = false;
+      if (failed(groupedDependencyClosure(
+              rootsByGroup[group], closure, pendingOwnedEffect)))
         return reject(
             "operation-group backward slice crosses an observable effect");
+      if (pendingOwnedEffect)
+        continue;
       bool hasUnscheduledForeignGroup = false;
       for (Operation *operation : closure) {
         if (!taggedSet.contains(operation))
