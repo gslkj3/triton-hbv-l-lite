@@ -160,6 +160,9 @@ class LoopBridgeRouteCompositionLegalityV2:
                 or self.route_subject_exact_trip_count < 1))
             or (self.route_subject_exact_trip_count is not None
                 and self.runtime_main_tail_certificate_ref)
+            or (self.route_subject_available
+                and self.route_subject_exact_trip_count is None
+                and not self.runtime_main_tail_certificate_ref)
             or not self.route_factor_kind
             or not self.factor_admission_ref
             or self.legal == bool(self.typed_reason)

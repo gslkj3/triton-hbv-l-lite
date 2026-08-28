@@ -3357,9 +3357,12 @@ FailureOr<ParsedLoopPlan> parseLoopPlan(StringRef payload,
            (!memberNested || *nestingDepth < 1 ||
             nestedCertificate !=
                 "nested_inner_dimension_independent_sink_v1")) ||
-          (!nested &&
+          (!nested && !providerBoundPipelineSubjectSet &&
            (*nestingDepth != 0 || memberNested ||
             (parent && !parent->empty()) ||
+            (nestedCertificate && !nestedCertificate->empty()))) ||
+          (providerBoundPipelineSubjectSet &&
+           (memberNested || (parent && !parent->empty()) ||
             (nestedCertificate && !nestedCertificate->empty())))) {
         reason = "provider-bound Loop member semantics are not closed";
         return failure();
@@ -4691,7 +4694,14 @@ LoopDependenceCertificate certifyNativeDynamicPipelineSubject(
   bool hasNestedLoop = false;
   bool hasTopLevelLoad = hasNativeVisibleAsyncLoadService(loop);
   loop.walk([&](Operation *operation) {
-    if (operation != loop.getOperation() && isa<scf::ForOp>(operation))
+    // Keep this planning-cut proxy identical to the native pipeliner's
+    // isOuterLoop predicate.  In particular, a Bridge-constructed scf.for
+    // that contains a source scf.while is an outer loop even though a walk
+    // sees a sufficiently wide load somewhere in its body.  Calling it
+    // pipeline-capable here would defer a fully observable refusal until
+    // final async attestation.
+    if (operation != loop.getOperation() &&
+        isa<scf::ForOp, scf::WhileOp>(operation))
       hasNestedLoop = true;
   });
   // AssignLoadLatencies schedules only a sufficiently wide service rooted
@@ -4709,6 +4719,33 @@ LoopDependenceCertificate certifyNativeDynamicPipelineSubject(
     return {false, "", "pipeline_loop_carried_distance_exceeds_one"};
   return {true,
           "native_dynamic_pipeline_predicated_prologue_epilogue_v1", ""};
+}
+
+// Prospective, route-local counterpart of the first mandatory grouped-load
+// checks in materializeBridgeLogical.  Bridge has already cloned and tagged
+// the exact source lineages at this point, so block ownership, group
+// cardinality and memory semantics are facts rather than predictions.  This
+// certificate deliberately does not demand a load: store-only and generic
+// elementwise packing are independent logical adapters.
+LoopDependenceCertificate certifyBridgeLogicalLoadLineage(
+    scf::ForOp loop, int64_t routeFactor) {
+  if (routeFactor < 2 || !llvm::isPowerOf2_64(routeFactor))
+    return {false, "", "route_factor_is_not_a_power_of_two_at_least_two"};
+  SmallVector<LoadOp> loads;
+  loop.walk([&](LoadOp load) { loads.push_back(load); });
+  for (LoadOp load : loads) {
+    if (!isa<RankedTensorType>(load.getPtr().getType()))
+      continue;
+    if (!load.getBoundaryCheck().empty() || load.getPadding())
+      return {false, "",
+              "bridge_load_group_memory_semantics_are_not_exactly_packable"};
+    if (load.getResult().use_empty())
+      return {false, "", "bridge_load_group_has_no_materializable_user"};
+    for (Operation *user : load.getResult().getUsers())
+      if (user->getBlock() != load->getBlock())
+        return {false, "", "bridge_load_result_crosses_a_basic_block"};
+  }
+  return {true, "bridge_logical_block_local_grouped_load_lineage_v1", ""};
 }
 
 LoopDependenceCertificate
@@ -6791,7 +6828,8 @@ public:
       // region-local combiner blocks; they are dataflow aggregations inside
       // one logical program, not cross-program control flow.
       if (op.getNumRegions() != 0 &&
-          !isa<ReduceOp, ScanOp, scf::IfOp, scf::ForOp>(op))
+          !isa<ReduceOp, ScanOp, scf::IfOp, scf::ForOp,
+               scf::WhileOp>(op))
         hasNestedTopLevelControl = true;
     }
     if (xProgramIds.size() != 1 || hasNestedTopLevelControl) {
@@ -7431,6 +7469,18 @@ public:
         return signalPassFailure();
       }
       scf::ForOp loop = bridgeLoops.front();
+      if (parsed->route == kLogicalRoute) {
+        LoopDependenceCertificate logicalLineage =
+            certifyBridgeLogicalLoadLineage(loop, parsed->routeFactor);
+        if (!logicalLineage.safe) {
+          reportFailure(
+              module,
+              Twine("Bridge-composed logical route lacks prospective ") +
+                  "grouped-load lineage capability: " +
+                  logicalLineage.reason);
+          return signalPassFailure();
+        }
+      }
       if (parsed->route != kPipelineRoute)
         loop->setAttr(kSubjectAttr,
                       subjectLocator(module.getContext(), *parsed));
@@ -7719,10 +7769,14 @@ public:
                   : !exactTrip &&
                         member.runtimeMainTailCertificateRef ==
                             "native_dynamic_unroll_main_ordered_remainder_v1";
+          int64_t nestingDepth = 0;
+          for (Operation *parent = found->first->getParentOp(); parent;
+               parent = parent->getParentOp())
+            nestingDepth += isa<scf::ForOp>(parent);
           if (!tripMatches ||
               found->second.kind !=
                   member.routeCapabilityCertificateRef ||
-              member.nestingDepth != 0 ||
+              member.nestingDepth != nestingDepth ||
               member.routeFactor != parsed->stageCount) {
             reportFailure(
                 module,

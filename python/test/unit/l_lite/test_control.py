@@ -18,6 +18,10 @@ from triton.l_lite import (  # noqa: E402
     build_loop_intervention_cartesian_graph_v1,
     build_loop_native_autotune_control_v1,
 )
+from triton.l_lite.contract import (  # noqa: E402
+    LLiteSchemaError,
+    LoopBridgeRouteCompositionLegalityV2,
+)
 
 
 ROUTE_FACTORS = {route: (2, 4) for route in LOOP_COMPOSITION_ROUTES}
@@ -70,6 +74,25 @@ def test_full_unroll_equality_is_a_typed_materializer_limit():
     assert rejected
     assert {arm.typed_reason for arm in rejected} == {
         "current_full_unroll_requires_route_factor_equal_trip_count"}
+
+
+def test_runtime_route_subject_requires_main_tail_certificate():
+    with pytest.raises(LLiteSchemaError):
+        LoopBridgeRouteCompositionLegalityV2(
+            bridge_factor=1,
+            route_ref="l.ttir.full_unroll_phase_major.v1",
+            route_factor=2,
+            bridge_constructed=False,
+            route_subject_available=True,
+            route_subject_ref="l.route-subject.runtime",
+            route_subject_exact_trip_count=None,
+            runtime_main_tail_certificate_ref="",
+            route_factor_kind="unroll_grouping_factor",
+            factor_admission_ref="l.route-factor-admission.test",
+            legal=True,
+            typed_reason="",
+            proof_refs=("proof:test",),
+        )
 
 
 def test_native_autotuner_measures_all_candidates_and_selects_minimum():
