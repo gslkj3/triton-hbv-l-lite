@@ -1,0 +1,119 @@
+{
+  "report_cutoff_utc": "2026-09-13T11:10:00Z",
+  "scope": "Existing evidence snapshots only; no new measurement for this weekly report. Historical memory next-actions are not current authority.",
+  "files": [
+    {
+      "source": "/workspace/hbv-p3l0094/hbv/iterations/P3L-0201/matched-choice-evaluation-results.md",
+      "published": "matched-choice-evaluation-results.md",
+      "source_mtime": "2026-09-13 03:46:29.306824708 +0000",
+      "source_sha256": "500bc8d28d880f598d48cecd9fa7ee84c073f2441a3451f4e82ed31a41f5cc59",
+      "published_sha256": "500bc8d28d880f598d48cecd9fa7ee84c073f2441a3451f4e82ed31a41f5cc59"
+    },
+    {
+      "source": "/workspace/hbv-p3l0094/hbv/iterations/P3L-0201/pipeline-complete-factor-evaluation-results.md",
+      "published": "pipeline-complete-factor-evaluation-results.md",
+      "source_mtime": "2026-09-13 04:47:21.762660681 +0000",
+      "source_sha256": "9ad3232438e50c8c0a7fdcdcb4bc0144dfee194e10113fc316d3c79db3be9f92",
+      "published_sha256": "9ad3232438e50c8c0a7fdcdcb4bc0144dfee194e10113fc316d3c79db3be9f92"
+    },
+    {
+      "source": "/workspace/hbv-p3l0094/hbv/iterations/P3L-0201/pipeline-forward-response-results.md",
+      "published": "pipeline-forward-response-results.md",
+      "source_mtime": "2026-09-12 14:07:04.545032643 +0000",
+      "source_sha256": "f6c319a32395c6774ee32423968aeeafe7cd4ad49a9762ffe37c155b25c5c739",
+      "published_sha256": "f6c319a32395c6774ee32423968aeeafe7cd4ad49a9762ffe37c155b25c5c739"
+    },
+    {
+      "source": "/workspace/hbv-p3l0094/hbv/iterations/P3L-0201/controlled-shared-gp-results.md",
+      "published": "controlled-shared-gp-results.md",
+      "source_mtime": "2026-09-13 09:47:29.765851961 +0000",
+      "source_sha256": "400fa4d17c7000bf251d78a5271b4f338e466bab2057d0525d27967aa4e0c03d",
+      "published_sha256": "400fa4d17c7000bf251d78a5271b4f338e466bab2057d0525d27967aa4e0c03d"
+    },
+    {
+      "source": "/workspace/hbv-p3l0094/hbv/iterations/P3L-0201/bridge-live-chain-results.md",
+      "published": "bridge-live-chain-results.md",
+      "source_mtime": "2026-09-13 10:57:18.337663857 +0000",
+      "source_sha256": "8ab64b86f89212b6bffb310a01b0f86c48213ad6338d5154f8c96293afd918d1",
+      "published_sha256": "8ab64b86f89212b6bffb310a01b0f86c48213ad6338d5154f8c96293afd918d1"
+    },
+    {
+      "source": "/workspace/hbv-p3l0094/hbv/iterations/P3L-0201/bridge-matched-search-audit.json",
+      "published": "bridge-matched-search-audit.json",
+      "source_mtime": "2026-09-13 11:04:45.265643786 +0000",
+      "source_sha256": "320058b778a3feb4f8237c29f6fb9fc1a032f62eed86dd3ff4454276a568e853",
+      "published_sha256": "82731f1a39a4105dc637f21d3b8b152d3402cf96bd18429267f363517ca6ff7a",
+      "format_note": "Published text adds a terminal newline; source hash retained separately."
+    },
+    {
+      "source": "/workspace/hbv-p3l0094/hbv/iterations/P3L-0201/topk-event-count-results.md",
+      "published": "topk-event-count-results.md",
+      "source_mtime": "2026-09-13 10:47:54.389689183 +0000",
+      "source_sha256": "1741195ae379e8b7c1e7219a734978dc6b0f668278ff05eaa1e0e85eb36605eb",
+      "published_sha256": "1741195ae379e8b7c1e7219a734978dc6b0f668278ff05eaa1e0e85eb36605eb"
+    },
+    {
+      "source": "/workspace/hbv-p3l0094/hbv/iterations/P3L-0201/pipeline-positive-center-impact-results.md",
+      "published": "pipeline-positive-center-impact-results.md",
+      "source_mtime": "2026-09-13 10:36:45.821719208 +0000",
+      "source_sha256": "ecceef25458657e66dd89813767f47c1ba85b85c22341a9cedeb60cbe34ce3d5",
+      "published_sha256": "ecceef25458657e66dd89813767f47c1ba85b85c22341a9cedeb60cbe34ce3d5"
+    },
+    {
+      "source": "/workspace/hbv-p3l0094/hbv/iterations/P3L-0158/memory.md",
+      "published": "P3L-0158-memory.md",
+      "source_mtime": "2026-09-07 17:18:24.155917744 +0000",
+      "source_sha256": "84d81f79c453e936ab18a417fc94e4d9335bd94d0e3a4440f45f771cb3d508a9",
+      "published_sha256": "84d81f79c453e936ab18a417fc94e4d9335bd94d0e3a4440f45f771cb3d508a9"
+    },
+    {
+      "source": "/workspace/hbv-p3l0094/hbv/iterations/P3L-0160/memory.md",
+      "published": "P3L-0160-memory.md",
+      "source_mtime": "2026-09-08 00:40:19.678726961 +0000",
+      "source_sha256": "4fc744746c4c0ecd9e701483e793954549fffabdc56b5b972f43fa7892f0cedb",
+      "published_sha256": "4fc744746c4c0ecd9e701483e793954549fffabdc56b5b972f43fa7892f0cedb"
+    },
+    {
+      "source": "/workspace/hbv-p3l0094/hbv/iterations/P3L-0163/memory.md",
+      "published": "P3L-0163-memory.md",
+      "source_mtime": "2026-09-08 09:26:45.889308460 +0000",
+      "source_sha256": "2d7955fabf83ed0585e2391d5468b9b731d66aae0cdd436d3fcc1c15e390b7ba",
+      "published_sha256": "2d7955fabf83ed0585e2391d5468b9b731d66aae0cdd436d3fcc1c15e390b7ba"
+    },
+    {
+      "source": "/workspace/hbv-p3l0094/hbv/iterations/P3L-0166/memory.md",
+      "published": "P3L-0166-memory.md",
+      "source_mtime": "2026-09-08 20:01:59.667596813 +0000",
+      "source_sha256": "f94d6dd64a87ce038925ed6dadd5d782111ef09eea982ae5247aa001d40b97a2",
+      "published_sha256": "f94d6dd64a87ce038925ed6dadd5d782111ef09eea982ae5247aa001d40b97a2"
+    },
+    {
+      "source": "/workspace/hbv-p3l0094/hbv/iterations/P3L-0175/memory.md",
+      "published": "P3L-0175-memory.md",
+      "source_mtime": "2026-09-10 13:19:09.068922032 +0000",
+      "source_sha256": "23fa7815f6767ecd9c7291d56e60b63cf9a8d12f99b5e653ca7a00f137b59bbb",
+      "published_sha256": "23fa7815f6767ecd9c7291d56e60b63cf9a8d12f99b5e653ca7a00f137b59bbb"
+    },
+    {
+      "source": "/workspace/hbv-p3l0094/hbv/iterations/P3L-0190/memory.md",
+      "published": "P3L-0190-memory.md",
+      "source_mtime": "2026-09-10 17:02:23.344320510 +0000",
+      "source_sha256": "984d3c05b261e11f0854d9162a028deccf7477b203e369308cb8b0be7a9cded2",
+      "published_sha256": "984d3c05b261e11f0854d9162a028deccf7477b203e369308cb8b0be7a9cded2"
+    },
+    {
+      "source": "/workspace/hbv-p3l0094/hbv/iterations/P3L-0195/memory.md",
+      "published": "P3L-0195-memory.md",
+      "source_mtime": "2026-09-11 06:10:16.574197522 +0000",
+      "source_sha256": "8f670b218e31c12769f07c93ebd66287b2760d2411c468747eecb503c8debb8f",
+      "published_sha256": "8f670b218e31c12769f07c93ebd66287b2760d2411c468747eecb503c8debb8f"
+    },
+    {
+      "source": "/workspace/hbv-p3l0094/hbv/iterations/P3L-0200/memory.md",
+      "published": "P3L-0200-memory.md",
+      "source_mtime": "2026-09-12 02:03:44.286981700 +0000",
+      "source_sha256": "ecfffc59cd0f3bbfcfd7ec8b7acd7f2d14b3e7df68779610eda31d9f61a4a930",
+      "published_sha256": "ecfffc59cd0f3bbfcfd7ec8b7acd7f2d14b3e7df68779610eda31d9f61a4a930"
+    }
+  ]
+}

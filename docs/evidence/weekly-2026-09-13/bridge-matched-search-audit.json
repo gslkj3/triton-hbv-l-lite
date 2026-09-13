@@ -1,0 +1,481 @@
+{
+  "rows": [
+    {
+      "request": "controlled-M40-N384",
+      "native_choice": "Original",
+      "main_choice": "Original",
+      "native_request_ns": 6856330121,
+      "main_request_ns": 2036237841,
+      "artifacts": {
+        "Original": {
+          "candidate_ref": "l.autotune-candidate.71fc807015c9529022cc41cb",
+          "correct": true,
+          "artifact_ref": "ae7a7c2080b72fcf0594e5f8d55f3a5573ee6d58aa1ebd1f7fa74772ddb0c5a6",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/VZ5HYIEAW4X46BMU4X4NKXZ2KVZ643KYVIPL2H37U5DXFXNQYWTA/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/VZ5HYIEAW4X46BMU4X4NKXZ2KVZ643KYVIPL2H37U5DXFXNQYWTA/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/VZ5HYIEAW4X46BMU4X4NKXZ2KVZ643KYVIPL2H37U5DXFXNQYWTA/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/VZ5HYIEAW4X46BMU4X4NKXZ2KVZ643KYVIPL2H37U5DXFXNQYWTA/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/VZ5HYIEAW4X46BMU4X4NKXZ2KVZ643KYVIPL2H37U5DXFXNQYWTA/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/VZ5HYIEAW4X46BMU4X4NKXZ2KVZ643KYVIPL2H37U5DXFXNQYWTA/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/VZ5HYIEAW4X46BMU4X4NKXZ2KVZ643KYVIPL2H37U5DXFXNQYWTA/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 1969272
+        },
+        "reorder_B2_F2": {
+          "candidate_ref": "l.autotune-candidate.3fabc3fb3b6012f704e0beb1",
+          "correct": true,
+          "artifact_ref": "b21bb2f39ade95a7c40d48f5e1087408441378cb47cce7e176dbf901011a9724",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/WIN3F44232K2PRANJD26CCDUBBCBG6GLI7GOPYLW3P4QCAI2S4SA/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/WIN3F44232K2PRANJD26CCDUBBCBG6GLI7GOPYLW3P4QCAI2S4SA/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/WIN3F44232K2PRANJD26CCDUBBCBG6GLI7GOPYLW3P4QCAI2S4SA/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/WIN3F44232K2PRANJD26CCDUBBCBG6GLI7GOPYLW3P4QCAI2S4SA/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/WIN3F44232K2PRANJD26CCDUBBCBG6GLI7GOPYLW3P4QCAI2S4SA/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/WIN3F44232K2PRANJD26CCDUBBCBG6GLI7GOPYLW3P4QCAI2S4SA/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/WIN3F44232K2PRANJD26CCDUBBCBG6GLI7GOPYLW3P4QCAI2S4SA/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 415985052
+        },
+        "vector_B2_F2": {
+          "candidate_ref": "l.autotune-candidate.3355a672c6a3c3e90eea5c71",
+          "correct": true,
+          "artifact_ref": "88419e6c8a1f7830f66b8cecb6a9f7a041e9137360d114efc8fc7967aae8748b",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/RBAZ43EKD54DB5TLRTWLNKPXUBA6SE3TMDIRJ36I7R4WPKXIOSFQ/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/RBAZ43EKD54DB5TLRTWLNKPXUBA6SE3TMDIRJ36I7R4WPKXIOSFQ/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/RBAZ43EKD54DB5TLRTWLNKPXUBA6SE3TMDIRJ36I7R4WPKXIOSFQ/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/RBAZ43EKD54DB5TLRTWLNKPXUBA6SE3TMDIRJ36I7R4WPKXIOSFQ/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/RBAZ43EKD54DB5TLRTWLNKPXUBA6SE3TMDIRJ36I7R4WPKXIOSFQ/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/RBAZ43EKD54DB5TLRTWLNKPXUBA6SE3TMDIRJ36I7R4WPKXIOSFQ/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/RBAZ43EKD54DB5TLRTWLNKPXUBA6SE3TMDIRJ36I7R4WPKXIOSFQ/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 801255804
+        },
+        "reorder_B4_F2": {
+          "candidate_ref": "l.autotune-candidate.d43f1c9a9e428d673bb07920",
+          "correct": true,
+          "artifact_ref": "9b8d8a81ce411c438d763f24373072f543316799738b381fd34e2dd51d44557e",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/TOGYVAOOIEOEHDLWH4SDOMDS6VBTCZ4ZOOFTQH6TJYW5KHKEKV7A/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/TOGYVAOOIEOEHDLWH4SDOMDS6VBTCZ4ZOOFTQH6TJYW5KHKEKV7A/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/TOGYVAOOIEOEHDLWH4SDOMDS6VBTCZ4ZOOFTQH6TJYW5KHKEKV7A/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/TOGYVAOOIEOEHDLWH4SDOMDS6VBTCZ4ZOOFTQH6TJYW5KHKEKV7A/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/TOGYVAOOIEOEHDLWH4SDOMDS6VBTCZ4ZOOFTQH6TJYW5KHKEKV7A/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/TOGYVAOOIEOEHDLWH4SDOMDS6VBTCZ4ZOOFTQH6TJYW5KHKEKV7A/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/TOGYVAOOIEOEHDLWH4SDOMDS6VBTCZ4ZOOFTQH6TJYW5KHKEKV7A/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 435976868
+        },
+        "vector_B4_F2": {
+          "candidate_ref": "l.autotune-candidate.1ea76ce39c95c5c7afde321c",
+          "correct": true,
+          "artifact_ref": "e226089eb93d8b05a2b8437d162c18dcc7aef3fa9433d889b8860107920dcfed",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/4ITARHVZHWFQLIVYIN6RMLAY3TD25472SQZ5RCNYQYAQPEQNZ7WQ/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/4ITARHVZHWFQLIVYIN6RMLAY3TD25472SQZ5RCNYQYAQPEQNZ7WQ/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/4ITARHVZHWFQLIVYIN6RMLAY3TD25472SQZ5RCNYQYAQPEQNZ7WQ/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/4ITARHVZHWFQLIVYIN6RMLAY3TD25472SQZ5RCNYQYAQPEQNZ7WQ/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/4ITARHVZHWFQLIVYIN6RMLAY3TD25472SQZ5RCNYQYAQPEQNZ7WQ/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/4ITARHVZHWFQLIVYIN6RMLAY3TD25472SQZ5RCNYQYAQPEQNZ7WQ/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/4ITARHVZHWFQLIVYIN6RMLAY3TD25472SQZ5RCNYQYAQPEQNZ7WQ/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 833305384
+        },
+        "reorder_B8_F2": {
+          "candidate_ref": "l.autotune-candidate.820a1e631f9979e50872712d",
+          "correct": true,
+          "artifact_ref": "660c57381c00991a371c68f1d9f2c5ee77e7f37a02c838f5e899f33bcb4c1796",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/MYGFOOA4ACMRUNY4NDY5T4WF5Z36P432ALEDR5PITHZTXS2MC6LA/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/MYGFOOA4ACMRUNY4NDY5T4WF5Z36P432ALEDR5PITHZTXS2MC6LA/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/MYGFOOA4ACMRUNY4NDY5T4WF5Z36P432ALEDR5PITHZTXS2MC6LA/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/MYGFOOA4ACMRUNY4NDY5T4WF5Z36P432ALEDR5PITHZTXS2MC6LA/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/MYGFOOA4ACMRUNY4NDY5T4WF5Z36P432ALEDR5PITHZTXS2MC6LA/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/MYGFOOA4ACMRUNY4NDY5T4WF5Z36P432ALEDR5PITHZTXS2MC6LA/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/MYGFOOA4ACMRUNY4NDY5T4WF5Z36P432ALEDR5PITHZTXS2MC6LA/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 436746271
+        },
+        "vector_B8_F2": {
+          "candidate_ref": "l.autotune-candidate.c3fd01abb704b3ef1838390e",
+          "correct": true,
+          "artifact_ref": "8bdd34b4a68fabde623162602c53e1f0f61905ca368d0cb9e5d4b1b2e01fc814",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/RPOTJNFGR6V54YRRMJQCYU7B6D3BSBOKG2GQZOPF2SY3FYA7ZAKA/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/RPOTJNFGR6V54YRRMJQCYU7B6D3BSBOKG2GQZOPF2SY3FYA7ZAKA/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/RPOTJNFGR6V54YRRMJQCYU7B6D3BSBOKG2GQZOPF2SY3FYA7ZAKA/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/RPOTJNFGR6V54YRRMJQCYU7B6D3BSBOKG2GQZOPF2SY3FYA7ZAKA/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/RPOTJNFGR6V54YRRMJQCYU7B6D3BSBOKG2GQZOPF2SY3FYA7ZAKA/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/RPOTJNFGR6V54YRRMJQCYU7B6D3BSBOKG2GQZOPF2SY3FYA7ZAKA/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/RPOTJNFGR6V54YRRMJQCYU7B6D3BSBOKG2GQZOPF2SY3FYA7ZAKA/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 821992678
+        }
+      }
+    },
+    {
+      "request": "controlled-M40-N896",
+      "native_choice": "reorder_B4_F2",
+      "main_choice": "reorder_B4_F2",
+      "native_request_ns": 4945177459,
+      "main_request_ns": 1748478081,
+      "artifacts": {
+        "Original": {
+          "candidate_ref": "l.autotune-candidate.3a0e150340ca7dd5a8cfdbf9",
+          "correct": true,
+          "artifact_ref": "e097e366e943f43b0e0f30b5dcf7f68df42eec193036074937e8b259f995a9ff",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/4CL6GZXJIP2DWDQPGC25Z57WRX2C53AZGA3AOSJX5CZFT6MVVH7Q/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/4CL6GZXJIP2DWDQPGC25Z57WRX2C53AZGA3AOSJX5CZFT6MVVH7Q/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/4CL6GZXJIP2DWDQPGC25Z57WRX2C53AZGA3AOSJX5CZFT6MVVH7Q/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/4CL6GZXJIP2DWDQPGC25Z57WRX2C53AZGA3AOSJX5CZFT6MVVH7Q/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/4CL6GZXJIP2DWDQPGC25Z57WRX2C53AZGA3AOSJX5CZFT6MVVH7Q/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/4CL6GZXJIP2DWDQPGC25Z57WRX2C53AZGA3AOSJX5CZFT6MVVH7Q/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/4CL6GZXJIP2DWDQPGC25Z57WRX2C53AZGA3AOSJX5CZFT6MVVH7Q/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 5003935
+        },
+        "reorder_B2_F2": {
+          "candidate_ref": "l.autotune-candidate.f3165a851d2a29a9083078ae",
+          "correct": true,
+          "artifact_ref": "23ecdd77509de9961f7b6917f63fcc8ced98ce05fbd7f436364b02de29f697b3",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/EPWN252QTXUZMH33NEL7MP6MRTWZRTQF7PL7INRWJMBN4KPWS6ZQ/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/EPWN252QTXUZMH33NEL7MP6MRTWZRTQF7PL7INRWJMBN4KPWS6ZQ/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/EPWN252QTXUZMH33NEL7MP6MRTWZRTQF7PL7INRWJMBN4KPWS6ZQ/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/EPWN252QTXUZMH33NEL7MP6MRTWZRTQF7PL7INRWJMBN4KPWS6ZQ/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/EPWN252QTXUZMH33NEL7MP6MRTWZRTQF7PL7INRWJMBN4KPWS6ZQ/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/EPWN252QTXUZMH33NEL7MP6MRTWZRTQF7PL7INRWJMBN4KPWS6ZQ/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/EPWN252QTXUZMH33NEL7MP6MRTWZRTQF7PL7INRWJMBN4KPWS6ZQ/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 427441217
+        },
+        "vector_B2_F2": {
+          "candidate_ref": "l.autotune-candidate.f3b5badbc1cfd260a0aa10f1",
+          "correct": true,
+          "artifact_ref": "2b16506ebe1b3e6cf78f766e1bf8e1c2573f3fe43b1e467cf2b959f921e64c62",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/FMLFA3V6DM7GZ54POZXBX6HBYJLT6P7EHMPEM7HSXFM7SIPGJRRA/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/FMLFA3V6DM7GZ54POZXBX6HBYJLT6P7EHMPEM7HSXFM7SIPGJRRA/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/FMLFA3V6DM7GZ54POZXBX6HBYJLT6P7EHMPEM7HSXFM7SIPGJRRA/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/FMLFA3V6DM7GZ54POZXBX6HBYJLT6P7EHMPEM7HSXFM7SIPGJRRA/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/FMLFA3V6DM7GZ54POZXBX6HBYJLT6P7EHMPEM7HSXFM7SIPGJRRA/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/FMLFA3V6DM7GZ54POZXBX6HBYJLT6P7EHMPEM7HSXFM7SIPGJRRA/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/FMLFA3V6DM7GZ54POZXBX6HBYJLT6P7EHMPEM7HSXFM7SIPGJRRA/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 823760651
+        },
+        "reorder_B4_F2": {
+          "candidate_ref": "l.autotune-candidate.6bf9711658be1e36235e2b8b",
+          "correct": true,
+          "artifact_ref": "67b261d78590ae1be7b29f739d11ee2f5215c516da3d6185c888b0f32fbf9d43",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/M6ZGDV4FSCXBXZ5ST5ZZ2EPOF5JBLRIW3I6WDBOIRCYPGL57TVBQ/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/M6ZGDV4FSCXBXZ5ST5ZZ2EPOF5JBLRIW3I6WDBOIRCYPGL57TVBQ/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/M6ZGDV4FSCXBXZ5ST5ZZ2EPOF5JBLRIW3I6WDBOIRCYPGL57TVBQ/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/M6ZGDV4FSCXBXZ5ST5ZZ2EPOF5JBLRIW3I6WDBOIRCYPGL57TVBQ/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/M6ZGDV4FSCXBXZ5ST5ZZ2EPOF5JBLRIW3I6WDBOIRCYPGL57TVBQ/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/M6ZGDV4FSCXBXZ5ST5ZZ2EPOF5JBLRIW3I6WDBOIRCYPGL57TVBQ/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/M6ZGDV4FSCXBXZ5ST5ZZ2EPOF5JBLRIW3I6WDBOIRCYPGL57TVBQ/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 428674822
+        },
+        "vector_B4_F2": {
+          "candidate_ref": "l.autotune-candidate.db6fb8ddbc4eab57ced750d9",
+          "correct": true,
+          "artifact_ref": "954949cc7ddc0cdf79c0bb9b016907ab08549d370c4846b34977ada794f9673b",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/SVEUTTD53QGN66OAXONQC2IHVMEFJHJXBREENM2JO6W2PFHZM45Q/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/SVEUTTD53QGN66OAXONQC2IHVMEFJHJXBREENM2JO6W2PFHZM45Q/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/SVEUTTD53QGN66OAXONQC2IHVMEFJHJXBREENM2JO6W2PFHZM45Q/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/SVEUTTD53QGN66OAXONQC2IHVMEFJHJXBREENM2JO6W2PFHZM45Q/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/SVEUTTD53QGN66OAXONQC2IHVMEFJHJXBREENM2JO6W2PFHZM45Q/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/SVEUTTD53QGN66OAXONQC2IHVMEFJHJXBREENM2JO6W2PFHZM45Q/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/SVEUTTD53QGN66OAXONQC2IHVMEFJHJXBREENM2JO6W2PFHZM45Q/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 854575342
+        },
+        "reorder_B8_F2": {
+          "candidate_ref": "l.autotune-candidate.97440743afc3b5017a3643bf",
+          "correct": true,
+          "artifact_ref": "66aea703ce54c779cdb6a11f77c6276a579ef106b9da3abb03f6015cda4df3db",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/M2XKOA6OKTDXTTNWUEPXPRRHNJLZ54IGXHNDVOYD6YAVZWSN6PNQ/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/M2XKOA6OKTDXTTNWUEPXPRRHNJLZ54IGXHNDVOYD6YAVZWSN6PNQ/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/M2XKOA6OKTDXTTNWUEPXPRRHNJLZ54IGXHNDVOYD6YAVZWSN6PNQ/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/M2XKOA6OKTDXTTNWUEPXPRRHNJLZ54IGXHNDVOYD6YAVZWSN6PNQ/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/M2XKOA6OKTDXTTNWUEPXPRRHNJLZ54IGXHNDVOYD6YAVZWSN6PNQ/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/M2XKOA6OKTDXTTNWUEPXPRRHNJLZ54IGXHNDVOYD6YAVZWSN6PNQ/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/M2XKOA6OKTDXTTNWUEPXPRRHNJLZ54IGXHNDVOYD6YAVZWSN6PNQ/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 432050851
+        },
+        "vector_B8_F2": {
+          "candidate_ref": "l.autotune-candidate.14b2926b56400884566dd973",
+          "correct": true,
+          "artifact_ref": "03e6e7325492c19da6b19d53bb71edd15c8218b281b66712f707ac533167af1c",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/APTOOMSUSLAZ3JVRTVJ3W4PN2FOIEGFSQG3GOEXXA6WFGMLHV4OA/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/APTOOMSUSLAZ3JVRTVJ3W4PN2FOIEGFSQG3GOEXXA6WFGMLHV4OA/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/APTOOMSUSLAZ3JVRTVJ3W4PN2FOIEGFSQG3GOEXXA6WFGMLHV4OA/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/APTOOMSUSLAZ3JVRTVJ3W4PN2FOIEGFSQG3GOEXXA6WFGMLHV4OA/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/APTOOMSUSLAZ3JVRTVJ3W4PN2FOIEGFSQG3GOEXXA6WFGMLHV4OA/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/APTOOMSUSLAZ3JVRTVJ3W4PN2FOIEGFSQG3GOEXXA6WFGMLHV4OA/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/APTOOMSUSLAZ3JVRTVJ3W4PN2FOIEGFSQG3GOEXXA6WFGMLHV4OA/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 826910083
+        }
+      }
+    },
+    {
+      "request": "controlled-M80-N384",
+      "native_choice": "reorder_B4_F2",
+      "main_choice": "reorder_B4_F2",
+      "native_request_ns": 4844778626,
+      "main_request_ns": 1664518481,
+      "artifacts": {
+        "Original": {
+          "candidate_ref": "l.autotune-candidate.d619c1149e71b4be0b41f04f",
+          "correct": true,
+          "artifact_ref": "56106621fe9dbaf04cd487baf8d290b280127217375b09fca37d547c38e9fd6d",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/KYIGMIP6TW5PATGUQ65PRUUQWKABE4QXG5NQT7FDPVKHYOHJ7VWQ/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/KYIGMIP6TW5PATGUQ65PRUUQWKABE4QXG5NQT7FDPVKHYOHJ7VWQ/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/KYIGMIP6TW5PATGUQ65PRUUQWKABE4QXG5NQT7FDPVKHYOHJ7VWQ/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/KYIGMIP6TW5PATGUQ65PRUUQWKABE4QXG5NQT7FDPVKHYOHJ7VWQ/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/KYIGMIP6TW5PATGUQ65PRUUQWKABE4QXG5NQT7FDPVKHYOHJ7VWQ/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/KYIGMIP6TW5PATGUQ65PRUUQWKABE4QXG5NQT7FDPVKHYOHJ7VWQ/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/KYIGMIP6TW5PATGUQ65PRUUQWKABE4QXG5NQT7FDPVKHYOHJ7VWQ/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 4190498
+        },
+        "reorder_B2_F2": {
+          "candidate_ref": "l.autotune-candidate.d55b232bfb39fa7e6694ec0b",
+          "correct": true,
+          "artifact_ref": "efd920e3759f3488dec200ccb2376942e3df0bb1c61d69ad17b73d7df5c82eb3",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/57MSBY3VT42IRXWCADGLEN3JILR56C5RYYOWTLIXW46X35OIF2ZQ/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/57MSBY3VT42IRXWCADGLEN3JILR56C5RYYOWTLIXW46X35OIF2ZQ/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/57MSBY3VT42IRXWCADGLEN3JILR56C5RYYOWTLIXW46X35OIF2ZQ/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/57MSBY3VT42IRXWCADGLEN3JILR56C5RYYOWTLIXW46X35OIF2ZQ/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/57MSBY3VT42IRXWCADGLEN3JILR56C5RYYOWTLIXW46X35OIF2ZQ/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/57MSBY3VT42IRXWCADGLEN3JILR56C5RYYOWTLIXW46X35OIF2ZQ/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/57MSBY3VT42IRXWCADGLEN3JILR56C5RYYOWTLIXW46X35OIF2ZQ/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 344297760
+        },
+        "vector_B2_F2": {
+          "candidate_ref": "l.autotune-candidate.d6dee0060303233da01f9fb5",
+          "correct": true,
+          "artifact_ref": "ef2757cfb16870fd111d6a8d3efa88cab429d1afb881e96ac01101a2674654e1",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/54TVPT5RNBYP2EI5NKGT56UIZK2CTUNPXCA6S2WACEA2EZ2GKTQQ/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/54TVPT5RNBYP2EI5NKGT56UIZK2CTUNPXCA6S2WACEA2EZ2GKTQQ/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/54TVPT5RNBYP2EI5NKGT56UIZK2CTUNPXCA6S2WACEA2EZ2GKTQQ/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/54TVPT5RNBYP2EI5NKGT56UIZK2CTUNPXCA6S2WACEA2EZ2GKTQQ/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/54TVPT5RNBYP2EI5NKGT56UIZK2CTUNPXCA6S2WACEA2EZ2GKTQQ/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/54TVPT5RNBYP2EI5NKGT56UIZK2CTUNPXCA6S2WACEA2EZ2GKTQQ/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/54TVPT5RNBYP2EI5NKGT56UIZK2CTUNPXCA6S2WACEA2EZ2GKTQQ/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 801365705
+        },
+        "reorder_B4_F2": {
+          "candidate_ref": "l.autotune-candidate.1cfd036e2fd657e029129068",
+          "correct": true,
+          "artifact_ref": "ec8a61d099e32c514898bf93661774d4e3bf8194c49098ddfc28e586785cb870",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/5SFGDUEZ4MWFCSEYX6JWMF3U2TR37AMUYSIJRXP4FDSYM6C4XBYA/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/5SFGDUEZ4MWFCSEYX6JWMF3U2TR37AMUYSIJRXP4FDSYM6C4XBYA/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/5SFGDUEZ4MWFCSEYX6JWMF3U2TR37AMUYSIJRXP4FDSYM6C4XBYA/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/5SFGDUEZ4MWFCSEYX6JWMF3U2TR37AMUYSIJRXP4FDSYM6C4XBYA/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/5SFGDUEZ4MWFCSEYX6JWMF3U2TR37AMUYSIJRXP4FDSYM6C4XBYA/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/5SFGDUEZ4MWFCSEYX6JWMF3U2TR37AMUYSIJRXP4FDSYM6C4XBYA/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/5SFGDUEZ4MWFCSEYX6JWMF3U2TR37AMUYSIJRXP4FDSYM6C4XBYA/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 453653383
+        },
+        "vector_B4_F2": {
+          "candidate_ref": "l.autotune-candidate.a9bcd4934f716beb549cf0e8",
+          "correct": true,
+          "artifact_ref": "9ca9ad1d8cb603e6ba90a183eef62ec9edd9faf7ad8f485324de6628b48ae94c",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/TSU22HMMWYB6NOUQUGB655ROZHW5T6XXVWHUQUZE3ZTCRNEK5FGA/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/TSU22HMMWYB6NOUQUGB655ROZHW5T6XXVWHUQUZE3ZTCRNEK5FGA/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/TSU22HMMWYB6NOUQUGB655ROZHW5T6XXVWHUQUZE3ZTCRNEK5FGA/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/TSU22HMMWYB6NOUQUGB655ROZHW5T6XXVWHUQUZE3ZTCRNEK5FGA/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/TSU22HMMWYB6NOUQUGB655ROZHW5T6XXVWHUQUZE3ZTCRNEK5FGA/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/TSU22HMMWYB6NOUQUGB655ROZHW5T6XXVWHUQUZE3ZTCRNEK5FGA/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/TSU22HMMWYB6NOUQUGB655ROZHW5T6XXVWHUQUZE3ZTCRNEK5FGA/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 802473224
+        },
+        "reorder_B8_F2": {
+          "candidate_ref": "l.autotune-candidate.045bf7ac7377f49512430c05",
+          "correct": true,
+          "artifact_ref": "afbefd0c1c915e933bae216ac25420d4ba66fbd62a22c83f9fe781d5f41958fd",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/V67P2DA4SFPJGO5OEFVMEVBA2S5GN66WFIRMQP4746A5L5AZLD6Q/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/V67P2DA4SFPJGO5OEFVMEVBA2S5GN66WFIRMQP4746A5L5AZLD6Q/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/V67P2DA4SFPJGO5OEFVMEVBA2S5GN66WFIRMQP4746A5L5AZLD6Q/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/V67P2DA4SFPJGO5OEFVMEVBA2S5GN66WFIRMQP4746A5L5AZLD6Q/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/V67P2DA4SFPJGO5OEFVMEVBA2S5GN66WFIRMQP4746A5L5AZLD6Q/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/V67P2DA4SFPJGO5OEFVMEVBA2S5GN66WFIRMQP4746A5L5AZLD6Q/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/V67P2DA4SFPJGO5OEFVMEVBA2S5GN66WFIRMQP4746A5L5AZLD6Q/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 432201865
+        },
+        "vector_B8_F2": {
+          "candidate_ref": "l.autotune-candidate.b7384dfe976332ca2410e310",
+          "correct": true,
+          "artifact_ref": "5ad6bcaec65395b726965915369ae6676a4f1c38284a19882a7027682759ae4f",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/LLLLZLWGKOK3OJUWLEKTNGXGM5VE6HBYFBFBTCBKOATWQJ2ZVZHQ/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/LLLLZLWGKOK3OJUWLEKTNGXGM5VE6HBYFBFBTCBKOATWQJ2ZVZHQ/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/LLLLZLWGKOK3OJUWLEKTNGXGM5VE6HBYFBFBTCBKOATWQJ2ZVZHQ/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/LLLLZLWGKOK3OJUWLEKTNGXGM5VE6HBYFBFBTCBKOATWQJ2ZVZHQ/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/LLLLZLWGKOK3OJUWLEKTNGXGM5VE6HBYFBFBTCBKOATWQJ2ZVZHQ/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/LLLLZLWGKOK3OJUWLEKTNGXGM5VE6HBYFBFBTCBKOATWQJ2ZVZHQ/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/LLLLZLWGKOK3OJUWLEKTNGXGM5VE6HBYFBFBTCBKOATWQJ2ZVZHQ/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 844897163
+        }
+      }
+    },
+    {
+      "request": "controlled-M80-N896",
+      "native_choice": "reorder_B8_F2",
+      "main_choice": "reorder_B8_F2",
+      "native_request_ns": 5337930058,
+      "main_request_ns": 1831046487,
+      "artifacts": {
+        "Original": {
+          "candidate_ref": "l.autotune-candidate.53e260e385232f8dbd68b6ca",
+          "correct": true,
+          "artifact_ref": "44dde8703adce836b4abb2f848c5797335f60478ba9c043d8aea29d4e5781e70",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/ITO6Q4B23TUDNNFLWL4ERRLZOM27MBDYXKOAIPMK5IU5JZLYDZYA/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/ITO6Q4B23TUDNNFLWL4ERRLZOM27MBDYXKOAIPMK5IU5JZLYDZYA/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/ITO6Q4B23TUDNNFLWL4ERRLZOM27MBDYXKOAIPMK5IU5JZLYDZYA/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/ITO6Q4B23TUDNNFLWL4ERRLZOM27MBDYXKOAIPMK5IU5JZLYDZYA/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/ITO6Q4B23TUDNNFLWL4ERRLZOM27MBDYXKOAIPMK5IU5JZLYDZYA/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/ITO6Q4B23TUDNNFLWL4ERRLZOM27MBDYXKOAIPMK5IU5JZLYDZYA/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/ITO6Q4B23TUDNNFLWL4ERRLZOM27MBDYXKOAIPMK5IU5JZLYDZYA/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 9614573
+        },
+        "reorder_B2_F2": {
+          "candidate_ref": "l.autotune-candidate.59cca24e96f22e4c27db8453",
+          "correct": true,
+          "artifact_ref": "2ef475e02803e451e24518e28e59fe5b77b3c2b0724e63c2de1573fa77cf651b",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/F32HLYBIAPSFDYSFDDRI4WP6LN33HQVQOJHGHQW6CVZ7U56PMUNQ/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/F32HLYBIAPSFDYSFDDRI4WP6LN33HQVQOJHGHQW6CVZ7U56PMUNQ/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/F32HLYBIAPSFDYSFDDRI4WP6LN33HQVQOJHGHQW6CVZ7U56PMUNQ/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/F32HLYBIAPSFDYSFDDRI4WP6LN33HQVQOJHGHQW6CVZ7U56PMUNQ/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/F32HLYBIAPSFDYSFDDRI4WP6LN33HQVQOJHGHQW6CVZ7U56PMUNQ/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/F32HLYBIAPSFDYSFDDRI4WP6LN33HQVQOJHGHQW6CVZ7U56PMUNQ/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/F32HLYBIAPSFDYSFDDRI4WP6LN33HQVQOJHGHQW6CVZ7U56PMUNQ/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 435584154
+        },
+        "vector_B2_F2": {
+          "candidate_ref": "l.autotune-candidate.eb3228be1fc733a32f7269ba",
+          "correct": true,
+          "artifact_ref": "98101db773d13f486999536b1aef5f69fc0d00eb78bb48ef2c57f06748e8181b",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/TAIB3N3T2E7UQ2MZKNVRV327NH6A2AHLPC5UR3ZMK7YGOSHIDANQ/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/TAIB3N3T2E7UQ2MZKNVRV327NH6A2AHLPC5UR3ZMK7YGOSHIDANQ/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/TAIB3N3T2E7UQ2MZKNVRV327NH6A2AHLPC5UR3ZMK7YGOSHIDANQ/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/TAIB3N3T2E7UQ2MZKNVRV327NH6A2AHLPC5UR3ZMK7YGOSHIDANQ/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/TAIB3N3T2E7UQ2MZKNVRV327NH6A2AHLPC5UR3ZMK7YGOSHIDANQ/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/TAIB3N3T2E7UQ2MZKNVRV327NH6A2AHLPC5UR3ZMK7YGOSHIDANQ/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/TAIB3N3T2E7UQ2MZKNVRV327NH6A2AHLPC5UR3ZMK7YGOSHIDANQ/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 919218550
+        },
+        "reorder_B4_F2": {
+          "candidate_ref": "l.autotune-candidate.6e8b92416c796deedec83462",
+          "correct": true,
+          "artifact_ref": "89cbf887d548f55e21f46e4f07d77162052fe6ca4c6ed34f5e563577943d9e28",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/RHF7RB6VJD2V4IPUNZHQPV3RMICS7ZWKJRXNGT26KY2XPFB5TYUA/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/RHF7RB6VJD2V4IPUNZHQPV3RMICS7ZWKJRXNGT26KY2XPFB5TYUA/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/RHF7RB6VJD2V4IPUNZHQPV3RMICS7ZWKJRXNGT26KY2XPFB5TYUA/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/RHF7RB6VJD2V4IPUNZHQPV3RMICS7ZWKJRXNGT26KY2XPFB5TYUA/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/RHF7RB6VJD2V4IPUNZHQPV3RMICS7ZWKJRXNGT26KY2XPFB5TYUA/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/RHF7RB6VJD2V4IPUNZHQPV3RMICS7ZWKJRXNGT26KY2XPFB5TYUA/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/RHF7RB6VJD2V4IPUNZHQPV3RMICS7ZWKJRXNGT26KY2XPFB5TYUA/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 448579727
+        },
+        "vector_B4_F2": {
+          "candidate_ref": "l.autotune-candidate.73dd9f820c25ff2500e280f5",
+          "correct": true,
+          "artifact_ref": "efec01f95a618a75b39283ba88b756873cd154b907949bef175f9641570a4a7d",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/57WAD6K2MGFHLM4SQO5IRN2WQ46NCVFZA6KJX3YXL6LECVYKJJ6Q/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/57WAD6K2MGFHLM4SQO5IRN2WQ46NCVFZA6KJX3YXL6LECVYKJJ6Q/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/57WAD6K2MGFHLM4SQO5IRN2WQ46NCVFZA6KJX3YXL6LECVYKJJ6Q/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/57WAD6K2MGFHLM4SQO5IRN2WQ46NCVFZA6KJX3YXL6LECVYKJJ6Q/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/57WAD6K2MGFHLM4SQO5IRN2WQ46NCVFZA6KJX3YXL6LECVYKJJ6Q/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/57WAD6K2MGFHLM4SQO5IRN2WQ46NCVFZA6KJX3YXL6LECVYKJJ6Q/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/57WAD6K2MGFHLM4SQO5IRN2WQ46NCVFZA6KJX3YXL6LECVYKJJ6Q/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 910281091
+        },
+        "reorder_B8_F2": {
+          "candidate_ref": "l.autotune-candidate.d0befe5e0da9146f6c52ca43",
+          "correct": true,
+          "artifact_ref": "21547ee9998eb3046672dedb77e2268ee97476682669d46333d55c29e1bb6a59",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/EFKH52MZR2ZQIZTS33NXPYRGR3UXI5TIEZU5IYZT2VOCTYN3NJMQ/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/EFKH52MZR2ZQIZTS33NXPYRGR3UXI5TIEZU5IYZT2VOCTYN3NJMQ/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/EFKH52MZR2ZQIZTS33NXPYRGR3UXI5TIEZU5IYZT2VOCTYN3NJMQ/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/EFKH52MZR2ZQIZTS33NXPYRGR3UXI5TIEZU5IYZT2VOCTYN3NJMQ/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/EFKH52MZR2ZQIZTS33NXPYRGR3UXI5TIEZU5IYZT2VOCTYN3NJMQ/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/EFKH52MZR2ZQIZTS33NXPYRGR3UXI5TIEZU5IYZT2VOCTYN3NJMQ/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/EFKH52MZR2ZQIZTS33NXPYRGR3UXI5TIEZU5IYZT2VOCTYN3NJMQ/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 448968434
+        },
+        "vector_B8_F2": {
+          "candidate_ref": "l.autotune-candidate.171d3564fc481b31c83aa170",
+          "correct": true,
+          "artifact_ref": "3d62e8f0805827fc2d571ca5e143c5e0ee361116e87f5a0f284696255adedc07",
+          "metadata_group": {
+            "softmax_kernel_non_inner.source": "/tmp/p201-bridge-native-rfwq_8kj/HVROR4EALAT7YLKXDSS6CQ6F4DXDMEIW5B7VUDZII2LCKWW63QDQ/softmax_kernel_non_inner.source",
+            "softmax_kernel_non_inner.ttir": "/tmp/p201-bridge-native-rfwq_8kj/HVROR4EALAT7YLKXDSS6CQ6F4DXDMEIW5B7VUDZII2LCKWW63QDQ/softmax_kernel_non_inner.ttir",
+            "softmax_kernel_non_inner.ttgir": "/tmp/p201-bridge-native-rfwq_8kj/HVROR4EALAT7YLKXDSS6CQ6F4DXDMEIW5B7VUDZII2LCKWW63QDQ/softmax_kernel_non_inner.ttgir",
+            "softmax_kernel_non_inner.llir": "/tmp/p201-bridge-native-rfwq_8kj/HVROR4EALAT7YLKXDSS6CQ6F4DXDMEIW5B7VUDZII2LCKWW63QDQ/softmax_kernel_non_inner.llir",
+            "softmax_kernel_non_inner.ptx": "/tmp/p201-bridge-native-rfwq_8kj/HVROR4EALAT7YLKXDSS6CQ6F4DXDMEIW5B7VUDZII2LCKWW63QDQ/softmax_kernel_non_inner.ptx",
+            "softmax_kernel_non_inner.cubin": "/tmp/p201-bridge-native-rfwq_8kj/HVROR4EALAT7YLKXDSS6CQ6F4DXDMEIW5B7VUDZII2LCKWW63QDQ/softmax_kernel_non_inner.cubin",
+            "softmax_kernel_non_inner.json": "/tmp/p201-bridge-native-rfwq_8kj/HVROR4EALAT7YLKXDSS6CQ6F4DXDMEIW5B7VUDZII2LCKWW63QDQ/softmax_kernel_non_inner.json"
+          },
+          "materialize_check_ns": 921233248
+        }
+      }
+    }
+  ],
+  "native_role_ns": 26148119263,
+  "main_role_ns": 10884236192,
+  "measured_cost_ratio": 2.4023844027033405,
+  "original_compiles": 4,
+  "candidate_compiles": 24,
+  "publication_permitted": false,
+  "limitations": [
+    "Separate sequential roles, one run per method; not a repeated cost confidence interval.",
+    "Includes cold Original and correctness validation; not unchecked stock autotune latency.",
+    "Excludes process startup/imports before main and model training/calibration.",
+    "No benefit or recovery claim until frozen common independent evaluation.",
+    "Same fixed-config development subspace, not all factors/families."
+  ],
+  "bindings": {
+    "/workspace/hbv-p3l0094/hbv/iterations/P3L-0201/bridge-matched-search-v2-protocol.json": "7706830bcee622d69f20363242e7fc3c15cfb1c815c33f726017b793daec6f2e",
+    "/workspace/hbv-p3l0094/hbv/iterations/P3L-0201/bridge-matched-search-v2-execution-000.json": "fd9679dbde357aca9233c0a19bd6c5ca75c09209321090c45dd64a445f858966",
+    "/workspace/hbv-p3l0094/hbv/iterations/P3L-0201/bridge-live-chain-protocol.json": "1bf751bb971bc176d7697aaae1c7660aea6b603c341fabce18c1e7a3c1f39c00",
+    "/workspace/hbv-p3l0094/hbv/iterations/P3L-0201/bridge-live-chain-execution-000.json": "400a598bc07270ac2a368a6e97d27f0803980c9fb7444ac9aefdcfbab8a65b60",
+    "/workspace/hbv-p3l0094/hbv/iterations/P3L-0201/bridge-live-chain-audit.json": "bea178b3aa302378adf8f9a70a053c4f6977b6e103b115136d1ad399c33f9201",
+    "/workspace/hbv-p3l0094/hbv/iterations/P3L-0201/audit_bridge_matched_search.py": "1e550d3c63ad50c8af3013b084a33db38fe982a70abeecc5da2d469979cf8f84"
+  }
+}
