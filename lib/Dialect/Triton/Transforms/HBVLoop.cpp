@@ -920,6 +920,124 @@ bool provesDisjointPrograms(const AffinePidFootprint &footprint) {
   return stride > span;
 }
 
+// The finite-domain extension below must not inherit the older footprint
+// abstraction's unconstrained scalar translations or mathematical-integer
+// arithmetic. Check every offset intermediate at its actual signed bit width.
+bool boundedOffsetDoesNotWrap(Value value, Value pid, int64_t extent,
+                              unsigned &budget) {
+  if (!budget--)
+    return false;
+  auto type = dyn_cast<IntegerType>(getElementTypeOrSelf(value.getType()));
+  if (!type || type.getWidth() > 64)
+    return false;
+  Operation *op = value.getDefiningOp();
+  bool leaf = value == pid || isa_and_nonnull<arith::ConstantOp, MakeRangeOp>(op);
+  if (!op && splatInteger(value))
+    leaf = true;
+  if (!leaf) {
+    if (!op)
+      return false;
+    StringRef name = op->getName().getStringRef();
+    if (name != "tt.splat" && name != "tt.broadcast" &&
+        name != "tt.expand_dims" && name != "tt.reshape" &&
+        name != "tt.trans" && name != "arith.extsi" &&
+        name != "arith.addi" && name != "arith.subi" && name != "arith.muli")
+      return false;
+    for (Value input : op->getOperands())
+      if (!boundedOffsetDoesNotWrap(input, pid, extent, budget))
+        return false;
+  }
+  llvm::SmallPtrSet<Value, 32> active;
+  auto f = integerFootprint(value, pid, active);
+  if (!f)
+    return false;
+  __int128 delta = static_cast<__int128>(f->pidStride) * (extent - 1);
+  __int128 low = f->localMin + std::min(__int128(0), delta);
+  __int128 high = f->localMax + std::max(__int128(0), delta);
+  __int128 limit = __int128(1) << (type.getWidth() - 1);
+  return low >= -limit && high < limit;
+}
+
+bool boundedPointerDoesNotWrap(Value pointer, Value root, Value pid,
+                               int64_t extent, unsigned &budget) {
+  if (!budget--)
+    return false;
+  if (pointer == root)
+    return true;
+  Operation *op = pointer.getDefiningOp();
+  if (!op)
+    return false;
+  if (auto add = dyn_cast<AddPtrOp>(op))
+    return boundedPointerDoesNotWrap(add.getPtr(), root, pid, extent, budget) &&
+           boundedOffsetDoesNotWrap(add.getOffset(), pid, extent, budget);
+  StringRef name = op->getName().getStringRef();
+  return (name == "tt.splat" || name == "tt.broadcast" ||
+          name == "tt.expand_dims" || name == "tt.reshape" || name == "tt.trans") &&
+         op->getNumOperands() == 1 &&
+         boundedPointerDoesNotWrap(op->getOperand(0), root, pid, extent, budget);
+}
+
+bool provesBoundedStoreUnion(ArrayRef<StoreOp> stores, Value root,
+                             GetProgramIdOp pid) {
+  auto module = pid->getParentOfType<ModuleOp>();
+  auto raw = module->getAttrOfType<StringAttr>(kBridgeRuntimeScalarsAttr);
+  if (!raw || pid.getAxisAsInt() != 0)
+    return false;
+  auto parsed = llvm::json::parse(raw.getValue());
+  auto *object = parsed ? parsed->getAsObject() : nullptr;
+  auto *grid = object ? object->getArray("grid") : nullptr;
+  if (!object || object->getString("schema") != "triton.loop-bridge.runtime-scalars.v2" ||
+      !grid || grid->empty() || grid->size() > 3)
+    return false;
+  auto extent = (*grid)[0].getAsInteger();
+  auto bound = pid->getAttrOfType<IntegerAttr>(kBridgeAxisExtentAttr);
+  if (!extent || *extent < 1 || *extent > INT32_MAX ||
+      !bound || bound.getInt() != *extent)
+    return false;
+  // Other varying launch axes require their own joint-domain proof.
+  for (unsigned axis = 1; axis < grid->size(); ++axis)
+    if ((*grid)[axis].getAsInteger() != int64_t(1))
+      return false;
+  SmallVector<AffinePidFootprint> parts;
+  for (StoreOp store : stores) {
+    auto base = uniquePointerRoot(store.getPtr());
+    if (!base || *base != root)
+      continue;
+    unsigned budget = 512;
+    if (!boundedPointerDoesNotWrap(store.getPtr(), root, pid.getResult(),
+                                   *extent, budget))
+      return false;
+    auto f = pointerFootprint(store.getPtr(), root, pid.getResult());
+    if (!f || !provesDisjointPrograms(*f))
+      return false;
+    parts.push_back(*f);
+  }
+  if (parts.empty())
+    return false;
+  __int128 stride = parts.front().pidStride;
+  if (stride < 0)
+    stride = -stride;
+  if (!stride)
+    return false;
+  auto floorDiv = [](__int128 n, __int128 d) {
+    __int128 q = n / d;
+    return n % d < 0 ? q - 1 : q;
+  };
+  for (const auto &a : parts)
+    for (const auto &b : parts) {
+      if (a.pidStride != b.pidStride)
+        return false;
+      __int128 low = -floorDiv(-(static_cast<__int128>(b.localMin) - a.localMax), stride);
+      __int128 high = floorDiv(static_cast<__int128>(b.localMax) - a.localMin, stride);
+      low = std::max(low, -static_cast<__int128>(*extent - 1));
+      high = std::min(high, static_cast<__int128>(*extent - 1));
+      if (low <= high && (low < 0 || high > 0))
+        return false;
+    }
+  return true;
+}
+
+
 Value stripShapeOnlyIntegerCasts(Value value) {
   while (Operation *definition = value.getDefiningOp()) {
     StringRef name = definition->getName().getStringRef();
@@ -2273,7 +2391,8 @@ LoopDependenceCertificate certifyBridgeProgramIndependence(
             combined.localMin, footprint->localMin);
         combined.localMax = std::max(
             combined.localMax, footprint->localMax);
-        if (!provesDisjointPrograms(combined))
+        if (!provesDisjointPrograms(combined) &&
+            !provesBoundedStoreUnion(stores, *root, pid))
           return {false, "", "same output base has overlapping cross-program stores"};
       }
     } else {
