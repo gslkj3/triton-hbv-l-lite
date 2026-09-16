@@ -8811,20 +8811,30 @@ LogicalResult materializeBridgePhase(FuncOp func, bool clearLineage = true,
       closure.insert(root);
     while (!worklist.empty()) {
       Operation *operation = worklist.pop_back_val();
-      for (Value operand : operation->getOperands()) {
-        Operation *definition = operand.getDefiningOp();
-        if (!definition || definition->getBlock() != operation->getBlock() ||
-            scheduled.contains(definition) || closure.contains(definition))
-          continue;
-        if (!isMemoryEffectFree(definition)) {
-          if (!taggedSet.contains(definition))
-            return failure();
-          pendingOwnedEffect = true;
-          continue;
+      bool crossedUnownedEffect = false;
+      // A region root can capture parent-block SSA values through nested
+      // operations. Move those definitions with the root, while leaving
+      // region-local definitions owned by their containing operation.
+      operation->walk([&](Operation *nested) {
+        for (Value operand : nested->getOperands()) {
+          Operation *definition = operand.getDefiningOp();
+          if (!definition || definition->getBlock() != block ||
+              scheduled.contains(definition) || closure.contains(definition))
+            continue;
+          if (!isMemoryEffectFree(definition)) {
+            if (!taggedSet.contains(definition)) {
+              crossedUnownedEffect = true;
+              continue;
+            }
+            pendingOwnedEffect = true;
+            continue;
+          }
+          closure.insert(definition);
+          worklist.push_back(definition);
         }
-        closure.insert(definition);
-        worklist.push_back(definition);
-      }
+      });
+      if (crossedUnownedEffect)
+        return failure();
     }
     return success();
   };
@@ -9198,6 +9208,11 @@ int64_t materializeExactElementwiseOperationGroups(
     packed->removeAttr(kRoleSubjectAttr);
     packed->removeAttr(kRoleIndexAttr);
     packed->removeAttr(kUnrollPartitionLineageAttr);
+    // Packing changes tensor rank. These prototype hints describe the old
+    // rank and must be re-derived by downstream axis analysis.
+    packed->removeAttr("tt.contiguity");
+    packed->removeAttr("tt.divisibility");
+    packed->removeAttr("tt.constancy");
     builder.insert(packed);
     for (unsigned resultIndex = 0; resultIndex < packed->getNumResults();
          ++resultIndex) {
@@ -9897,6 +9912,34 @@ LogicalResult materializeLogical(FuncOp func,
                op->getResult(0).getType() != vectorType;
       }))
     return failure();
+  // Prove the complete additive SSA chain. A factor-local reduction sums
+  // only this group's values; it must not discard the incoming accumulator
+  // when a grouped loop remains or the initial value is nonzero.
+  Value incomingAccumulator;
+  for (size_t index = 0; index < reductions.size(); ++index) {
+    auto add = dyn_cast<arith::AddIOp>(reductions[index]);
+    if (!add)
+      return failure();
+    Value value = computes[index]->getResult(0);
+    Value expectedCarry = index == 0
+                              ? Value()
+                              : reductions[index - 1]->getResult(0);
+    Value lhs = add.getLhs();
+    Value rhs = add.getRhs();
+    if (index == 0) {
+      if (lhs == value)
+        incomingAccumulator = rhs;
+      else if (rhs == value)
+        incomingAccumulator = lhs;
+      else
+        return failure();
+    } else if (!((lhs == value && rhs == expectedCarry) ||
+                 (rhs == value && lhs == expectedCarry))) {
+      return failure();
+    }
+  }
+  if (!incomingAccumulator || incomingAccumulator.getType() != vectorType)
+    return failure();
   OpBuilder builder(computes.back());
   builder.setInsertionPointAfter(computes.back());
   Location loc = reductions.front()->getLoc();
@@ -9927,7 +9970,10 @@ LogicalResult materializeLogical(FuncOp func,
   auto sum = bodyBuilder.create<arith::AddIOp>(loc, body.getArgument(0),
                                                body.getArgument(1));
   bodyBuilder.create<ReduceReturnOp>(loc, sum.getResult());
-  reductions.back()->getResult(0).replaceAllUsesWith(reduced.getResult().front());
+  auto nextAccumulator = builder.create<arith::AddIOp>(
+      loc, incomingAccumulator, reduced.getResult().front());
+  reductions.back()->getResult(0).replaceAllUsesWith(
+      nextAccumulator.getResult());
   for (Operation *op : llvm::reverse(reductions))
     op->erase();
   clearRoles(loads);
