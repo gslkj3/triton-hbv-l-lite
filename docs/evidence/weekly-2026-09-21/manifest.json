@@ -19,7 +19,7 @@
   "files": [
     {
       "path": "docs/main-l-weekly-progress-2026-09-21.zh-CN.md",
-      "sha256": "c6073baca36154f5c8f1fbfd183feaaee82ea16215b58d4f069172be686c830d"
+      "sha256": "229e88e444125e8ac4287026615ecfe46ab993e11c6865e6ef977d1a9c54bacc"
     },
     {
       "path": "docs/evidence/weekly-2026-09-21/comparison.md",
@@ -52,6 +52,11 @@
     {
       "path": "docs/evidence/weekly-2026-09-21/supply-supervision-repair-review-v1.md",
       "sha256": "c8af59ec2e0bc5ffb7ab5090446dac7682de4f1e9df5ec77e3e19fd3193ec5e6"
+    },
+    {
+      "path": "docs/evidence/weekly-2026-09-21/response-276-paired-review-v1.md",
+      "sha256": "7237e620fd389afb7eef9b275fb12928fb3779d71020cb43b95a4dca2fe8baf0"
     }
-  ]
+  ],
+  "editorial_revision": "Reorganized by benefit changes, concrete work, new capabilities/potential contributions, and quantitative backend relationships; measurements unchanged."
 }
