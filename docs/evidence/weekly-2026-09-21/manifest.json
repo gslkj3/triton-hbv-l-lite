@@ -1,0 +1,57 @@
+{
+  "period": "2026-09-14 through 2026-09-21 05:19:46 UTC",
+  "role": "Development weekly report, historical L-lite comparison; not independent paper certification",
+  "population": 295,
+  "historical_material_opportunities": 228,
+  "frozen_model_and_candidates_commit": "2b3fb6105",
+  "fixture_repairs": [
+    "c05d389dc",
+    "460bcef9f",
+    "651a32e84"
+  ],
+  "fixture_only_rechecked_entries": 56,
+  "model_refitted_during_evaluation": false,
+  "l_lite_rerun": false,
+  "measurement_environment": "GPU0 UUID 696ac48d-d9c4-bd19-b4b5-da63b8714926; shared permitted, periodically recorded, not an exclusive precision claim",
+  "local_evidence_directory": "hbv/iterations/P3L-0204/weekly-full-2026-09-21-v1",
+  "material_threshold": 1.0175,
+  "recovery_definition": "measured selected speedup / historical L-lite oracle speedup",
+  "files": [
+    {
+      "path": "docs/main-l-weekly-progress-2026-09-21.zh-CN.md",
+      "sha256": "c6073baca36154f5c8f1fbfd183feaaee82ea16215b58d4f069172be686c830d"
+    },
+    {
+      "path": "docs/evidence/weekly-2026-09-21/comparison.md",
+      "sha256": "77a68e1a23fc8127c9462f82a833d6ccadeeabb374dfe02c81efa0d72b0b5d6e"
+    },
+    {
+      "path": "docs/evidence/weekly-2026-09-21/previous-full-comparison.md",
+      "sha256": "609dc1fc78a4be6cc82156f4383953ab682512ad15cc75ff47e0a13d1f34e61c"
+    },
+    {
+      "path": "docs/evidence/weekly-2026-09-21/response-276-batch-review-v1.md",
+      "sha256": "bfefdfda7de9f189de09625946db3dc7fb552014690d31e91bcaee14c18ff522"
+    },
+    {
+      "path": "docs/evidence/weekly-2026-09-21/response-276-dispatch-boundary-review-v1.md",
+      "sha256": "dc17cca1ec2ac75be1782122f41969b22d3a1684916170bcd2a9c2ba9160c29d"
+    },
+    {
+      "path": "docs/evidence/weekly-2026-09-21/source-buffer-round-review-v1.md",
+      "sha256": "8c50a0ee9fd5a1cf3cda9e3adcdf60023c11e1fb3f9612aaed5e41313bae5536"
+    },
+    {
+      "path": "docs/evidence/weekly-2026-09-21/summary.json",
+      "sha256": "f041165ef8d07923642bb54d09913ca063294bfa0eff4669afc97d3c5cf5c8be"
+    },
+    {
+      "path": "docs/evidence/weekly-2026-09-21/supply-population-review-v1.md",
+      "sha256": "a051a30a07ed1e9743eb681f8ab2d4bafa2fa79d2943d8d3add88fa1c9e4fdb7"
+    },
+    {
+      "path": "docs/evidence/weekly-2026-09-21/supply-supervision-repair-review-v1.md",
+      "sha256": "c8af59ec2e0bc5ffb7ab5090446dac7682de4f1e9df5ec77e3e19fd3193ec5e6"
+    }
+  ]
+}
