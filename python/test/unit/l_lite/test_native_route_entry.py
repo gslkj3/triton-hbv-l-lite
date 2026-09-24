@@ -8,7 +8,8 @@ pytestmark = pytest.mark.skipif(os.environ.get('L_CORE_TEST_GPU') != '1', reason
 @pytest.mark.parametrize('route_name', ['PIPELINE','REORDER','VECTORIZE'])
 @pytest.mark.parametrize('block', [32,64])
 @pytest.mark.parametrize('loop_kind', ['static','dynamic','nested'])
-def test_native_three_routes_with_explicit_adviser(route_name, block, loop_kind, monkeypatch):
+@pytest.mark.parametrize('dtype_name', ['int32','float32'])
+def test_native_three_routes_with_explicit_adviser(route_name, block, loop_kind, dtype_name, monkeypatch):
     """Known legal decision tests compiler wiring, NOT model selection quality."""
     from hashlib import sha256
     import torch
@@ -24,13 +25,13 @@ def test_native_three_routes_with_explicit_adviser(route_name, block, loop_kind,
     @triton.jit
     def kernel(x,y,N,BLOCK:tl.constexpr,DYNAMIC:tl.constexpr,NESTED:tl.constexpr):
         lane=tl.arange(0,BLOCK)
-        acc=tl.full((BLOCK,),0,tl.int32)
+        acc=tl.full((BLOCK,),0,x.dtype.element_ty)
         for outer in range(2 if NESTED else 1):
             for i in tl.range(N if DYNAMIC else 4,num_stages=3,loop_unroll_factor=2):
                 acc += tl.load(x+(outer*(N if DYNAMIC else 4)+i)*BLOCK+lane)
         tl.store(y+lane,acc)
 
-    identity=f'test-explicit-native-route-{route_name}-{block}-{loop_kind}-v2'
+    identity=f'test-explicit-native-route-{route_name}-{block}-{loop_kind}-{dtype_name}-v3'
     def adviser(module,metadata,options,capability):
         ref=sha256(str(module).encode()).hexdigest()
         population=prepare_module_candidates(module,target=GPUTarget('cuda',capability,32),
@@ -50,8 +51,8 @@ def test_native_three_routes_with_explicit_adviser(route_name, block, loop_kind,
     monkeypatch.setenv('TRITON_L_ANALYSIS_REF',identity)
     trips=5 if loop_kind=='dynamic' else 4
     total=trips*(2 if loop_kind=='nested' else 1)
-    x=torch.arange(total*block,device='cuda',dtype=torch.int32)
-    y=torch.empty(block,device='cuda',dtype=torch.int32)
+    x=torch.arange(total*block,device='cuda',dtype=getattr(torch,dtype_name))
+    y=torch.empty(block,device='cuda',dtype=getattr(torch,dtype_name))
     compiled=kernel[(1,)](x,y,trips,BLOCK=block,
         DYNAMIC=loop_kind=='dynamic',NESTED=loop_kind=='nested')
     torch.cuda.synchronize()
@@ -62,4 +63,3 @@ def test_native_three_routes_with_explicit_adviser(route_name, block, loop_kind,
     if loop_kind=='nested' or route_name=='PIPELINE':
         assert 'scf.for' in compiled.asm['ttir'], 'outer/pipeline loop must survive'
     assert all(stage in compiled.asm for stage in ('ttgir','llir','ptx','cubin'))
-
