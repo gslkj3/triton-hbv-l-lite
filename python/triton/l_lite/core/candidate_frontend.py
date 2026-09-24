@@ -1,7 +1,7 @@
 """Shared nonpredictive AST candidate preparation."""
 from dataclasses import dataclass
 from time import perf_counter_ns
-from .frontend import prepare_from_source
+from .frontend import prepare_from_source, prepare_from_module
 from .upstream import PreparedBatch, PreparationFailure
 from .candidates import enumerate_candidates
 
@@ -15,6 +15,26 @@ class PythonCandidates:
 
 def prepare_python_candidates(source, *, target, options, bridge_factors,
                               route_factors, binding, runtime_scalars=None):
+    def prepare(factor):
+        return prepare_from_source(source, target=target, metadata=options,
+            factor=factor, source_ref=binding.source_ref,
+            compiler_commit=binding.compiler_commit, runtime_scalars=runtime_scalars)
+    return _prepare_candidates(prepare, bridge_factors, route_factors, binding)
+
+
+def prepare_module_candidates(module, *, target, options, bridge_factors,
+                              route_factors, binding, specialization_ref,
+                              runtime_scalars=None):
+    """Enumerate from the actual native frontend output, before make_ttir passes."""
+    def prepare(factor):
+        return prepare_from_module(module, target=target, metadata=options,
+            factor=factor, source_ref=binding.source_ref,
+            compiler_commit=binding.compiler_commit,
+            specialization_ref=specialization_ref, runtime_scalars=runtime_scalars)
+    return _prepare_candidates(prepare, bridge_factors, route_factors, binding)
+
+
+def _prepare_candidates(prepare, bridge_factors, route_factors, binding):
     factors = tuple(bridge_factors)
     if any(type(f) is not int or f < 1 for f in factors):
         raise ValueError('positive integer Bridge factors required')
@@ -25,9 +45,7 @@ def prepare_python_candidates(source, *, target, options, bridge_factors,
     # requested candidate space starts with a constructed-loop alternative.
     for factor in sorted(set(factors) | {1}):
         try:
-            item = prepare_from_source(source, target=target, metadata=options,
-                factor=factor, source_ref=binding.source_ref,
-                compiler_commit=binding.compiler_commit, runtime_scalars=runtime_scalars)
+            item = prepare(factor)
         except Exception as error:
             if factor == 1:
                 raise

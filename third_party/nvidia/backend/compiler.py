@@ -232,9 +232,6 @@ class CUDABackend(BaseBackend):
 
     @staticmethod
     def make_ttir(mod, metadata, opt, capability):
-        if opt.l_lite_mode == 'default':
-            from triton.l_lite.core.native_default_pipeline import make_default_ttir
-            return make_default_ttir(mod, opt, capability)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
@@ -246,7 +243,17 @@ class CUDABackend(BaseBackend):
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+        if opt.l_lite_mode == 'default':
+            pm.run(mod, 'make_ttir_prefix')
+            from triton.l_lite.core.native_default_pipeline import bind_default_decision
+            bind_default_decision(mod, opt, capability)
+            pm = ir.pass_manager(mod.context)
+            pm.enable_debug()
+            passes.ttir.add_hbv_loop_decision(pm)
         passes.ttir.add_loop_unroll(pm)
+        if opt.l_lite_mode == 'default':
+            passes.ttir.add_hbv_loop_materialize(pm)
+            passes.ttir.add_hbv_validate_loop_plan(pm)
         pm.run(mod, 'make_ttir')
         return mod
 

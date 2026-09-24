@@ -50,6 +50,24 @@ class PreparedIR:
 
 
 def prepare_module(module, config):
+    """Standalone preparation; the native pipeline owns this prefix itself."""
+    from triton._C.libtriton import ir, passes
+    pm = ir.pass_manager(module.context)
+    passes.common.add_inliner(pm)
+    passes.ttir.add_rewrite_tensor_pointer(pm)
+    if config.capability // 10 < 9:
+        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
+    passes.common.add_canonicalizer(pm)
+    passes.ttir.add_combine(pm)
+    passes.ttir.add_reorder_broadcast(pm)
+    passes.common.add_cse(pm)
+    passes.common.add_symbol_dce(pm)
+    pm.run(module, 'l_core_native_prefix')
+    return prepare_at_analysis_point(module, config)
+
+
+def prepare_at_analysis_point(module, config):
+    """Project passes only, after native cleanup and before native unroll."""
     from triton._C.libtriton import ir, passes
     for key in ('tt.hbv.plan_bundle', 'tt.hbv.l.static_facts'):
         if module.get_operation().get_str_attr(key) is not None:
@@ -65,15 +83,6 @@ def prepare_module(module, config):
         # Bridge's compiler parser verifies the versioned runtime binding.
         module.set_attr('tt.loop_bridge.runtime_scalars', builder.get_string_attr(config.runtime_scalars))
     pm = ir.pass_manager(module.context)
-    passes.common.add_inliner(pm)
-    passes.ttir.add_rewrite_tensor_pointer(pm)
-    if config.capability // 10 < 9:
-        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
-    passes.common.add_canonicalizer(pm)
-    passes.ttir.add_combine(pm)
-    passes.ttir.add_reorder_broadcast(pm)
-    passes.common.add_cse(pm)
-    passes.common.add_symbol_dce(pm)
     passes.ttir.add_loop_bridge_discover(pm)
     if config.factor != 1:
         passes.ttir.add_loop_bridge_program_coarsening(pm)
