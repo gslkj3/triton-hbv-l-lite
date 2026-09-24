@@ -628,6 +628,21 @@ void init_triton_ir(py::module &&m) {
       .def("get_num_regions", &Operation::getNumRegions)
       .def("get_region", &Operation::getRegion, ret::reference)
       .def("get_block", &Operation::getBlock, ret::reference)
+      .def("get_argument_integer_attr_bits",
+           [](Operation &self, int64_t index,
+              const std::string &name) -> py::object {
+             auto function = dyn_cast<tt::FuncOp>(&self);
+             if (!function || index < 0 ||
+                 static_cast<uint64_t>(index) >= function.getNumArguments())
+               throw py::value_error("Valid Triton function argument required");
+             auto attr = function.getArgAttrOfType<IntegerAttr>(index, name);
+             if (!attr || attr.getValue().getBitWidth() > 64)
+               return py::none();
+             py::dict result;
+             result["bits"] = attr.getValue().getBitWidth();
+             result["pattern"] = py::int_(attr.getValue().getZExtValue());
+             return result;
+           })
       .def("get_str_attr",
            [](Operation &self, const std::string &name) -> py::object {
              auto ret = self.getAttrOfType<StringAttr>(name);

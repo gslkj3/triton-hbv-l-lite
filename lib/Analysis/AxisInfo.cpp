@@ -992,6 +992,65 @@ public:
   }
 };
 
+class JoinOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<triton::JoinOp> {
+public:
+  using AxisInfoVisitorImpl<triton::JoinOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(triton::JoinOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    const auto &lhs = operands[0]->getValue();
+    const auto &rhs = operands[1]->getValue();
+    AxisInfo::DimVectorT contiguity, divisibility, constancy;
+    // join adds a trailing dimension without changing either input slice.
+    // Along each existing axis only guarantees common to both slices survive.
+    // Reducing contiguity can introduce new group starts, so merely taking the
+    // gcd of the old divisibilities would be unsound (e.g. range vs 2*range).
+    for (unsigned d = 0; d < lhs.getRank(); ++d) {
+      contiguity.push_back(gcd(lhs.getContiguity(d), rhs.getContiguity(d)));
+      divisibility.push_back(getDivisibilityFromContiguity(lhs, rhs, d));
+      constancy.push_back(gcd(lhs.getConstancy(d), rhs.getConstancy(d)));
+    }
+    std::optional<int64_t> constantValue;
+    if (lhs.getConstantValue() &&
+        lhs.getConstantValue() == rhs.getConstantValue())
+      constantValue = lhs.getConstantValue();
+    bool sameValues = op->getOperand(0) == op->getOperand(1) || constantValue;
+    // No adjacency relation between the two slices is assumed. Even when
+    // equal, the new axis repeats values rather than consecutive integers.
+    contiguity.push_back(1);
+    divisibility.push_back(1);
+    constancy.push_back(sameValues ? 2 : 1);
+    return AxisInfo(contiguity, divisibility, constancy, constantValue);
+  }
+};
+
+class SplitOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<triton::SplitOp> {
+public:
+  using AxisInfoVisitorImpl<triton::SplitOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(triton::SplitOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    const auto &src = operands[0]->getValue();
+    // Each result fixes the last coordinate to 0 or 1. Guarantees along
+    // surviving axes already hold for every such slice, so both results
+    // inherit them. Do not infer stronger, lane-specific alignment.
+    // Rank-zero tensors use the existing conservative analysis fallback.
+    if (src.getRank() <= 1)
+      return {};
+    auto contiguity = src.getContiguity();
+    auto divisibility = src.getDivisibility();
+    auto constancy = src.getConstancy();
+    contiguity.pop_back();
+    divisibility.pop_back();
+    constancy.pop_back();
+    return AxisInfo(contiguity, divisibility, constancy, src.getConstantValue());
+  }
+};
+
 class TransOpAxisInfoVisitor final
     : public AxisInfoVisitorImpl<triton::TransOp> {
 public:
@@ -1067,6 +1126,8 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
   visitors.append<LoadOpAxisInfoVisitor>();
   visitors.append<TransOpAxisInfoVisitor>();
+  visitors.append<JoinOpAxisInfoVisitor>();
+  visitors.append<SplitOpAxisInfoVisitor>();
 
   if (callback)
     callback(visitors);

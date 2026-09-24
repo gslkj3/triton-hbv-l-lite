@@ -18,6 +18,7 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/JSON.h"
 
 #define DEBUG_TYPE "triton-loop-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -444,10 +445,12 @@ bool loadRequiresAdditionalBuffer(Operation *loadOp) {
 }
 
 scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
-                      triton::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+                      triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                      llvm::json::Array &backendCopyWidthFacts) {
   llvm::MapVector<Operation *, AsyncLoad> asyncLoads;
   llvm::MapVector<int, LoadGroupInfo> loadGroups;
   llvm::SmallVector<Operation *> scalarLoads;
+  int64_t loadOrdinal = 0;
   // Only visit the top level ops, we do not support pipelining conditional
   // loads for now
   for (auto &op : forOp.getBody()->without_terminator()) {
@@ -456,45 +459,101 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
       if (stageDiff == 0) {
         // Don't care about non-pipelined loads. Scalar loads will be converted
         // to tensor loads if they are pipelined.
+        // Keep a diagnostic fact for this otherwise invisible case.  This is
+        // deliberately not an eligibility decision and is not consumed by
+        // route selection; it distinguishes "no load visited" from "load
+        // visited but scheduled at the current stage" in HBV attestation.
+        llvm::json::Object fact;
+        fact["schema"] =
+            "triton.hbv.l.backend-copy-width-attestation.v1";
+        fact["load_ordinal"] = loadOrdinal++;
+        fact["operation"] = op.getName().getStringRef().str();
+        fact["stage_diff_before_buffer"] = 0;
+        fact["stage_diff"] = 0;
+        fact["pipeline_considered"] = false;
+        fact["skipped_non_pipelined"] = true;
+        fact["async_eligible"] = false;
+        backendCopyWidthFacts.push_back(std::move(fact));
         continue;
       }
       SharedEncodingTrait sharedEncoding;
       bool canUseAsyncCp = false;
       int contiguity = 1;
+      int pointerContiguity = 1;
+      int maskAlignment = -1;
+      int copyVecBytes = -1;
+      Type resultType = op.getResultTypes()[0];
+      int elementBits = 0;
+      if (auto ranked = dyn_cast<RankedTensorType>(resultType))
+        elementBits = ranked.getElementType().getIntOrFloatBitWidth();
+      else
+        elementBits = resultType.getIntOrFloatBitWidth();
+      int effectiveWidthBits = elementBits;
+      bool sharedEncodingAvailable = false;
       if (!isa<RankedTensorType>(op.getResultTypes()[0])) {
-        canUseAsyncCp = op.getResultTypes()[0].getIntOrFloatBitWidth() >= 32;
+        // Preserve the native scalar-to-single-element-tensor path.  A scalar
+        // has no existing distributed layout, but lowerLoads supplies this
+        // shared encoding and converts its type before creating allocations.
+        // Diagnostic observation must not disable a native transformation.
+        canUseAsyncCp = elementBits >= 32;
         sharedEncoding = ttg::SwizzledSharedEncodingAttr::get(
             forOp.getContext(), 1, 1, 1, {0},
             ttg::CTAEncodingAttr::getDefault(forOp.getContext(), 1));
-        if (canUseAsyncCp) {
+        sharedEncodingAvailable = true;
+        if (canUseAsyncCp)
           scalarLoads.push_back(&op);
-        }
+        // No mask is a neutral alignment constraint.  Keep the attestation
+        // total rather than encoding "missing" as a fake numeric value.
+        maskAlignment = 1;
       } else {
         sharedEncoding = getSharedEncoding(&op);
+        sharedEncodingAvailable = !!sharedEncoding;
         // Do not create async loads for small loads (cp.async requires at least
         // 4 bytes)
         canUseAsyncCp =
             isa<tt::LoadOp>(op) &&
             canBeConvertedToAsyncLoad(cast<tt::LoadOp>(op), axisInfoAnalysis);
-        int copyVecBytes = getCopyVecBytes(
+        copyVecBytes = getCopyVecBytes(
             cast<RankedTensorType>(op.getResultTypes()[0]), sharedEncoding);
 
         canUseAsyncCp &= copyVecBytes >= 4;
-        if (canUseAsyncCp) {
+        if (isa<tt::LoadOp>(op)) {
           auto loadOp = cast<tt::LoadOp>(op);
           auto ptr = loadOp.getPtr();
           unsigned vec = axisInfoAnalysis.getContiguity(ptr);
-          if (auto mask = loadOp.getMask())
-            vec = std::min<unsigned>(vec,
-                                     axisInfoAnalysis.getMaskAlignment(mask));
+          pointerContiguity = vec;
+          if (auto mask = loadOp.getMask()) {
+            maskAlignment = axisInfoAnalysis.getMaskAlignment(mask);
+            vec = std::min<unsigned>(vec, maskAlignment);
+          } else {
+            maskAlignment = vec;
+          }
+          // Match native lowering: allocation/layout uses the mask-limited
+          // width. Keep the unmasked pointer fact separate for observation.
           contiguity = vec;
+          effectiveWidthBits = vec * elementBits;
         }
       }
+      llvm::json::Object fact;
+      fact["schema"] = "triton.hbv.l.backend-copy-width-attestation.v1";
+      fact["load_ordinal"] = loadOrdinal++;
+      fact["operation"] = op.getName().getStringRef().str();
+      fact["element_bits"] = elementBits;
+      fact["pointer_contiguity_lanes"] = pointerContiguity;
+      fact["mask_alignment_lanes"] = maskAlignment;
+      fact["load_width_bits"] = effectiveWidthBits;
+      fact["copy_vec_bytes"] = copyVecBytes;
+      fact["stage_diff_before_buffer"] = stageDiff;
+      fact["pipeline_considered"] = true;
+      fact["skipped_non_pipelined"] = false;
+      fact["shared_encoding_available"] = sharedEncodingAvailable;
       if (canUseAsyncCp || isTMALoad(&op)) {
         if (loadRequiresAdditionalBuffer(&op)) {
           // Allocate additional buffer required by the wgmma pipelining.
           stageDiff += 1;
         }
+        fact["stage_diff"] = stageDiff;
+        fact["async_eligible"] = canUseAsyncCp;
         auto &asyncLoad = asyncLoads[&op];
         asyncLoad.stageDiff = stageDiff;
         asyncLoad.contiguity = contiguity;
@@ -508,7 +567,13 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
                            "copy. This will likely "
                            "lead to pipelining in registers and severe "
                            "performance degradation.";
+        fact["stage_diff"] = stageDiff;
+        fact["async_eligible"] = false;
+      } else {
+        fact["stage_diff"] = stageDiff;
+        fact["async_eligible"] = false;
       }
+      backendCopyWidthFacts.push_back(std::move(fact));
     }
   }
 
@@ -1055,13 +1120,62 @@ scf::ForOp lowerMMAs(scf::ForOp forOp, CoarseSchedule &schedule) {
 /////////////////////////////
 
 void lowerLoop(scf::ForOp forOp,
-               triton::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+               triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+               llvm::json::Array &backendCopyWidthFacts,
+               int64_t loopOrdinal) {
   CoarseSchedule schedule;
   if (failed(schedule.deSerialize(forOp))) {
+    llvm::json::Object fact;
+    fact["schema"] =
+        "triton.hbv.l.backend-copy-width-attestation.v1";
+    fact["observation_kind"] = "loop_schedule";
+    fact["operation"] = "scf.for";
+    fact["loop_ordinal"] = loopOrdinal;
+    fact["schedule_deserialize"] = false;
+    fact["lowering_entered"] = false;
+    fact["diagnostic_reason"] = "schedule_deserialize_failed";
+    backendCopyWidthFacts.push_back(std::move(fact));
+    // The schedule is absent before LowerLoops when AssignLatencies did not
+    // admit a load.  Record the same rule inputs here so that a Bridge loop
+    // can be diagnosed without turning this observer into a selector gate.
+    for (auto &op : forOp.getBody()->without_terminator()) {
+      if (!isa<tt::LoadOp>(op))
+        continue;
+      auto loadOp = cast<tt::LoadOp>(op);
+      auto resultTy = dyn_cast<RankedTensorType>(op.getResultTypes()[0]);
+      llvm::json::Object loadFact;
+      loadFact["schema"] =
+          "triton.hbv.l.backend-copy-width-attestation.v1";
+      loadFact["observation_kind"] = "pre_schedule_load_rule";
+      loadFact["operation"] = op.getName().getStringRef().str();
+      loadFact["loop_ordinal"] = loopOrdinal;
+      loadFact["schedule_deserialize"] = false;
+      loadFact["lowering_entered"] = false;
+      loadFact["element_bits"] = resultTy
+          ? resultTy.getElementType().getIntOrFloatBitWidth()
+          : op.getResultTypes()[0].getIntOrFloatBitWidth();
+      unsigned contiguity = axisInfoAnalysis.getContiguity(loadOp.getPtr());
+      unsigned maskAlignment = contiguity;
+      if (auto mask = loadOp.getMask())
+        maskAlignment = axisInfoAnalysis.getMaskAlignment(mask);
+      loadFact["pointer_contiguity_lanes"] = contiguity;
+      loadFact["mask_alignment_lanes"] = maskAlignment;
+      auto shared = getSharedEncoding(&op);
+      loadFact["shared_encoding_available"] = !!shared;
+      int copyVecBytes = -1;
+      if (shared && resultTy)
+        copyVecBytes = getCopyVecBytes(resultTy, shared);
+      loadFact["copy_vec_bytes"] = copyVecBytes;
+      bool asyncRule = canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis);
+      loadFact["can_be_converted_to_async_load"] = asyncRule;
+      loadFact["copy_width_rule_eligible"] = asyncRule && copyVecBytes >= 4;
+      backendCopyWidthFacts.push_back(std::move(loadFact));
+    }
     return;
   }
   scf::ForOp newForOp = lowerMMAs(forOp, schedule);
-  newForOp = lowerLoads(newForOp, schedule, axisInfoAnalysis);
+  newForOp = lowerLoads(newForOp, schedule, axisInfoAnalysis,
+                        backendCopyWidthFacts);
   newForOp = lowerTMADescriptors(newForOp, schedule);
   schedule.serialize(newForOp);
 }
@@ -1070,13 +1184,25 @@ void lowerLoop(scf::ForOp forOp,
 
 void lowerLoops(ModuleOp moduleOp) {
   triton::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
+  llvm::json::Array backendCopyWidthFacts;
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
   if (loops.empty())
     return;
-  for (auto forOp : loops) {
-    lowerLoop(forOp, axisInfoAnalysis);
+  for (auto [loopOrdinal, forOp] : llvm::enumerate(loops)) {
+    lowerLoop(forOp, axisInfoAnalysis, backendCopyWidthFacts, loopOrdinal);
   }
+  llvm::json::Object attestation;
+  attestation["schema"] =
+      "triton.hbv.l.backend-copy-width-attestation.v1";
+  attestation["observation_stage"] = "ttgir_before_ptxas";
+  attestation["loads"] = std::move(backendCopyWidthFacts);
+  std::string attestationText;
+  llvm::raw_string_ostream attestationStream(attestationText);
+  attestationStream << llvm::json::Value(std::move(attestation));
+  moduleOp->setAttr(
+      "tt.hbv.l.backend_copy_width_facts",
+      StringAttr::get(moduleOp.getContext(), attestationStream.str()));
 }
 
 } // namespace gpu

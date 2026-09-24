@@ -157,6 +157,14 @@ include_directories(${PROJECT_BINARY_DIR}/third_party) # Tablegen'd files
 add_subdirectory(include)
 add_subdirectory(lib)
 
+# Shared rule-based loop implementation. Both Python wrappers and triton-opt
+# keep native registration names but resolve to these same six factories.
+set(LCORE_TRITON_SOURCE_DIR "${CMAKE_SOURCE_DIR}" CACHE PATH "Triton source for loop core")
+set(LCORE_TRITON_BINARY_DIR "${CMAKE_BINARY_DIR}" CACHE PATH "Triton generated headers for loop core")
+add_subdirectory(l_lite_core/compiler_src)
+target_include_directories(TritonTransforms PRIVATE "${CMAKE_SOURCE_DIR}/l_lite_core/compiler_src/include")
+target_link_libraries(TritonTransforms PUBLIC LCorePasses)
+
 # TODO: Figure out which target is sufficient to fix errors; triton is
 # apparently not enough. Currently set linking libstdc++fs for all targets
 # to support some old version GCC compilers like 8.3.0.

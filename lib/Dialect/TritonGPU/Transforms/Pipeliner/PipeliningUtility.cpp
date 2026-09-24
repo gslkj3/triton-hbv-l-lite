@@ -507,11 +507,20 @@ bool mlir::triton::canBeAsyncLoad(Operation *op) {
     return true;
   }
   assert(isa<tt::LoadOp>(op));
+  // Async global-to-shared lowering is defined for tensor loads.  Scalar
+  // loads can be loop-carried values (for example a prefix index or length)
+  // and must remain ordinary register loads; asking getSharedEncoding() to
+  // invent a layout for them used to cast their scalar result to
+  // RankedTensorType and abort the whole backend pipeline.  Treat this as a
+  // normal ineligibility rule instead of a compiler assertion.
+  auto ranked = dyn_cast<RankedTensorType>(op->getResultTypes()[0]);
+  if (!ranked)
+    return false;
   ttg::SharedEncodingTrait sharedEncoding = mlir::triton::getSharedEncoding(op);
   // Do not create async loads for small loads (cp.async requires at least 4
   // bytes)
   int copyVecBytes = mlir::triton::getCopyVecBytes(
-      cast<RankedTensorType>(op->getResultTypes()[0]), sharedEncoding);
+      ranked, sharedEncoding);
   if (copyVecBytes >= 4) {
     return true;
   }
@@ -608,7 +617,13 @@ ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(Operation *op) {
     }
   }
 
-  auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
+  // Scalar loads (for example a loop-carried index/length load) do not have
+  // a tensor layout and therefore cannot be assigned a shared-memory
+  // encoding.  The pipeliner must treat them as ordinary register values;
+  // attempting to derive a layout here used to abort the whole compilation.
+  auto ty = dyn_cast<RankedTensorType>(op->getResultTypes()[0]);
+  if (!ty)
+    return nullptr;
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
   auto order = ttg::getOrder(ty);
   if (isTMALoad(op)) {
