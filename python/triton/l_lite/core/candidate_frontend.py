@@ -24,13 +24,14 @@ def prepare_python_candidates(source, *, target, options, bridge_factors,
 
 def prepare_module_candidates(module, *, target, options, bridge_factors,
                               route_factors, binding, specialization_ref,
-                              runtime_scalars=None):
+                              runtime_scalars=None, at_analysis_point=False):
     """Enumerate from the actual native frontend output, before make_ttir passes."""
     def prepare(factor):
         return prepare_from_module(module, target=target, metadata=options,
             factor=factor, source_ref=binding.source_ref,
             compiler_commit=binding.compiler_commit,
-            specialization_ref=specialization_ref, runtime_scalars=runtime_scalars)
+            specialization_ref=specialization_ref, runtime_scalars=runtime_scalars,
+            at_analysis_point=at_analysis_point)
     return _prepare_candidates(prepare, bridge_factors, route_factors, binding)
 
 

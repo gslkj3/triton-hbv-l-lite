@@ -6,7 +6,7 @@ is separate from those options and never invokes the old backend's HBV parser.
 from dataclasses import replace
 import json
 from time import perf_counter_ns
-from .ttir import PreparationConfig, prepare_module
+from .ttir import PreparationConfig, prepare_module, prepare_at_analysis_point
 
 
 def native_options(metadata, target):
@@ -72,11 +72,13 @@ def prepare_from_source(source, *, target, metadata, factor, source_ref,
 
 
 def prepare_from_module(module, *, target, metadata, factor, source_ref,
-                        compiler_commit, specialization_ref, runtime_scalars=None):
+                        compiler_commit, specialization_ref, runtime_scalars=None,
+                        at_analysis_point=False):
     """Prepare one private copy of raw frontend TTIR; never mutate its caller.
 
     The native make_ttir entry can use this without regenerating Python AST IR.
-    This is not an entry for already optimized/selected TTIR snapshots.
+    at_analysis_point=True means ONLY the native cleanup prefix has run.
+    Neither mode accepts post-selection/materialization/backend snapshots.
     """
     from pathlib import Path
     from tempfile import TemporaryDirectory
@@ -97,7 +99,8 @@ def prepare_from_module(module, *, target, metadata, factor, source_ref,
         path.write_text(str(module))
         module = ir.parse_mlir_module(str(path), context)
     module.context = context
-    prepared = prepare_module(module, config)
+    prepare = prepare_at_analysis_point if at_analysis_point else prepare_module
+    prepared = prepare(module, config)
     native_payload = {k:v for k,v in options.__dict__.items()
                       if not k.startswith(('hbv_', 'loop_bridge_'))}
     return replace(prepared, preparation_ns=perf_counter_ns()-started,

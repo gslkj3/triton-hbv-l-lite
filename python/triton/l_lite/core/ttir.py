@@ -9,6 +9,7 @@ import json
 import math
 from time import perf_counter_ns
 from .facts import CompilerFacts, decode_facts
+from .ir_identity import canonical_ir_text, ir_digest
 
 
 @dataclass(frozen=True)
@@ -73,7 +74,7 @@ def prepare_at_analysis_point(module, config):
         if module.get_operation().get_str_attr(key) is not None:
             raise ValueError('preparation requires fresh pre-pass IR, not an existing plan or snapshot')
     started = perf_counter_ns()
-    source_hash = sha256(str(module).encode()).hexdigest()
+    source_hash = ir_digest(module)
     builder = ir.builder(module.context)
     module.set_attr('tt.loop_bridge.factor', builder.get_int32_attr(config.factor))
     module.set_attr('tt.loop_bridge.requested_divisors',
@@ -98,6 +99,6 @@ def prepare_at_analysis_point(module, config):
     divisors = tuple(module.get_int_attr('tt.loop_bridge.grid_divisor_'+axis) or 1 for axis in 'xyz')
     if divisors != config.bridge_divisors:
         raise ValueError('Bridge did not realize requested launch divisors')
-    text = str(module)
+    text = canonical_ir_text(module)
     return PreparedIR(facts, source_hash, sha256(text.encode()).hexdigest(), text,
                       config.factor, divisors, perf_counter_ns()-started, config)

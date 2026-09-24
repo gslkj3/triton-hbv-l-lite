@@ -105,6 +105,8 @@ def sm_arch_from_capability(capability: int):
 @dataclass(frozen=True)
 class CUDAOptions:
     l_lite_mode: str = "off"
+    l_analysis_ref: str = ""
+    l_original_grid: tuple = ()
     num_warps: int = 4
     num_ctas: int = 1
     num_stages: int = 3
@@ -178,8 +180,11 @@ class CUDABackend(BaseBackend):
         args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
         args['l_lite_mode'] = os.environ.get('TRITON_L_LITE_MODE', 'off')
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
-        if args['l_lite_mode'] not in ('off', 'default'):
-            raise ValueError('l_lite_mode currently supports off/default only')
+        if args['l_lite_mode'] not in ('off', 'default', 'predict'):
+            raise ValueError('invalid L mode')
+        if args['l_lite_mode'] == 'predict' and (
+                not args.get('l_analysis_ref') or not args.get('l_original_grid')):
+            raise ValueError('prediction requires adviser identity and original grid')
         capability = int(self._parse_arch(args["arch"]))
 
         if args.get("num_ctas", 1) > 1 and capability < 90:
@@ -243,15 +248,19 @@ class CUDABackend(BaseBackend):
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if opt.l_lite_mode == 'default':
+        if opt.l_lite_mode != 'off':
             pm.run(mod, 'make_ttir_prefix')
-            from triton.l_lite.core.native_default_pipeline import bind_default_decision
-            bind_default_decision(mod, opt, capability)
+            if opt.l_lite_mode == 'default':
+                from triton.l_lite.core.native_default_pipeline import bind_default_decision
+                bind_default_decision(mod, opt, capability)
+            else:
+                from triton.l_lite.core.analysis_hook import advise
+                advise(mod, metadata, opt, capability)
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
             passes.ttir.add_hbv_loop_decision(pm)
         passes.ttir.add_loop_unroll(pm)
-        if opt.l_lite_mode == 'default':
+        if opt.l_lite_mode != 'off':
             passes.ttir.add_hbv_loop_materialize(pm)
             passes.ttir.add_hbv_validate_loop_plan(pm)
         pm.run(mod, 'make_ttir')

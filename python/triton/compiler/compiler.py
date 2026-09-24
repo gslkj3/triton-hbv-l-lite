@@ -450,6 +450,10 @@ class CompiledKernel:
         device = driver.active.get_current_device()
         # create launcher
         self._run = driver.active.launcher_cls(self.src, self.metadata)
+        if getattr(self.metadata, 'l_lite_mode', 'off') == 'predict':
+            from triton.l_lite.core.analysis_hook import mapped_launcher
+            self._run = mapped_launcher(self._run, self.metadata.l_original_grid,
+                                         self.metadata.l_grid_divisors)
         # not enough shared memory to run the kernel
         max_shared = max_shared_mem(device)
         if self.metadata.shared > max_shared:

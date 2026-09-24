@@ -715,6 +715,19 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
 
+        if kwargs.get('l_lite_mode') == 'predict':
+            resolved_grid = grid(bound_args) if callable(grid) else grid
+            if resolved_grid is None or not 1 <= len(resolved_grid) <= 3:
+                raise ValueError('prediction requires an explicit original grid, including warmup')
+            resolved_grid = tuple(resolved_grid) + (1,) * (3-len(resolved_grid))
+            if any(type(g) is not int or g < 1 for g in resolved_grid):
+                raise ValueError('prediction requires positive integer grid')
+            grid = resolved_grid
+            kwargs['l_original_grid'] = resolved_grid
+            kwargs.setdefault('l_analysis_ref', os.environ.get('TRITON_L_ANALYSIS_REF', ''))
+            options = dict(options, l_original_grid=resolved_grid,
+                           l_analysis_ref=kwargs['l_analysis_ref'])
+
         key = compute_cache_key(kernel_key_cache, specialization, options)
         kernel = kernel_cache.get(key, None)
 
