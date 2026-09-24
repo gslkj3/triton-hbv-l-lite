@@ -9,7 +9,8 @@ from .ttir import prepare_at_analysis_point
 
 def bind_selected_decision(module, *, config, plan_json, source_sha256,
                            route_input_sha256):
-    from triton._C.libtriton import ir
+    import json
+    from triton._C.libtriton import passes
     if ir_digest(module) != source_sha256:
         raise ValueError('analysis decision belongs to a different input IR')
     if not plan_json or not route_input_sha256:
@@ -17,6 +18,8 @@ def bind_selected_decision(module, *, config, plan_json, source_sha256,
     prepared = prepare_at_analysis_point(module, config)
     if prepared.route_input_ir_sha256 != route_input_sha256:
         raise ValueError('actual Bridge output differs from analyzed candidate')
-    module.set_attr('tt.hbv.plan_bundle',
-                    ir.builder(module.context).get_string_attr(plan_json))
+    # The full record stays outside IR; only validated typed decision fields
+    # are passed to the materialization suffix.
+    module.set_attr('tt.hbv.plan_bundle', passes.ttir.make_l_decision_attribute(
+        module, json.loads(plan_json)))
     return prepared.grid_divisors

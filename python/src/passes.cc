@@ -3,6 +3,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
+#include "../../l_lite_core/compiler_src/include/LCore/Passes.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
@@ -47,16 +48,7 @@ void init_triton_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_loop_unroll", createTritonLoopUnroll);
   ADD_PASS_WRAPPER_0("add_triton_licm", createTritonLoopInvariantCodeMotion);
   ADD_PASS_WRAPPER_0("add_loop_aware_cse", createTritonLoopAwareCSE);
-  ADD_PASS_WRAPPER_0("add_hbv_loop_decision", createTritonHBVLoopDecision);
-  ADD_PASS_WRAPPER_0("add_hbv_loop_facts", createTritonHBVLoopFacts);
-  ADD_PASS_WRAPPER_0("add_loop_bridge_discover",
-                     createTritonLoopBridgeDiscover);
-  ADD_PASS_WRAPPER_0("add_loop_bridge_program_coarsening",
-                     createTritonLoopBridgeProgramCoarsening);
-  ADD_PASS_WRAPPER_0("add_hbv_loop_materialize",
-                     createTritonHBVLoopMaterialize);
-  ADD_PASS_WRAPPER_0("add_hbv_validate_loop_plan",
-                     createTritonHBVValidateLoopPlan);
+#include "../../l_lite_core/compiler_src/include/LCore/PythonPassBindings.inc"
   ADD_PASS_OPTION_WRAPPER_4("add_convert_to_ttgpuir",
                             createConvertTritonToTritonGPU, const std::string &,
                             int, int, int);

@@ -70,19 +70,25 @@ def prepare_module(module, config):
 def prepare_at_analysis_point(module, config):
     """Project passes only, after native cleanup and before native unroll."""
     from triton._C.libtriton import ir, passes
-    for key in ('tt.hbv.plan_bundle', 'tt.hbv.l.static_facts'):
-        if module.get_operation().get_str_attr(key) is not None:
-            raise ValueError('preparation requires fresh pre-pass IR, not an existing plan or snapshot')
+    entry_name = module.get_entry_func_name()
+    if entry_name and module.get_function(entry_name).get_operation().get_str_attr(
+            'tt.hbv.l.postcondition') is not None:
+        raise ValueError('preparation requires fresh IR, not a finalized materialization')
+    if (passes.ttir.has_l_decision(module) or
+            module.get_int_attr('tt.hbv.l.native_default_num_stages') is not None or
+            module.get_operation().get_str_attr('tt.hbv.l.static_facts') is not None):
+        raise ValueError('preparation requires fresh pre-pass IR, not an existing plan or snapshot')
     started = perf_counter_ns()
     source_hash = ir_digest(module)
     builder = ir.builder(module.context)
     module.set_attr('tt.loop_bridge.factor', builder.get_int32_attr(config.factor))
     module.set_attr('tt.loop_bridge.requested_divisors',
-                    builder.get_string_attr(json.dumps(config.bridge_divisors, separators=(',', ':'))))
+                    ir.make_attr(list(config.bridge_divisors), module.context))
     module.set_attr('tt.hbv.l.native_default_num_stages', builder.get_int32_attr(config.num_stages))
     if config.runtime_scalars is not None:
         # Bridge's compiler parser verifies the versioned runtime binding.
-        module.set_attr('tt.loop_bridge.runtime_scalars', builder.get_string_attr(config.runtime_scalars))
+        from .runtime_binding_attr import runtime_binding_attr
+        module.set_attr('tt.loop_bridge.runtime_scalars', runtime_binding_attr(config.runtime_scalars,module.context))
     pm = ir.pass_manager(module.context)
     passes.ttir.add_loop_bridge_discover(pm)
     if config.factor != 1:
@@ -92,9 +98,8 @@ def prepare_at_analysis_point(module, config):
         # native inlining, not a Bridge-name-specific downstream adapter.
         passes.common.add_inliner(pm)
         passes.common.add_symbol_dce(pm)
-    passes.ttir.add_hbv_loop_facts(pm)
     pm.run(module, 'l_core_prepare')
-    facts = decode_facts(module.get_operation().get_str_attr('tt.hbv.l.static_facts'),
+    facts = decode_facts(passes.ttir.query_l_planning_facts(module),
                          num_warps=config.num_warps, num_stages=config.num_stages)
     divisors = tuple(module.get_int_attr('tt.loop_bridge.grid_divisor_'+axis) or 1 for axis in 'xyz')
     if divisors != config.bridge_divisors:

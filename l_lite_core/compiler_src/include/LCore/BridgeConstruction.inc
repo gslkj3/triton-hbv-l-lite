@@ -18,43 +18,31 @@ public:
       return signalPassFailure();
     }
     SmallVector<int64_t, 3> requestedDivisors{factor, 1, 1};
-    if (auto raw = module->getAttrOfType<StringAttr>(
-            kBridgeRequestedDivisorsAttr)) {
-      auto parsed = llvm::json::parse(raw.getValue());
-      auto *array = parsed ? parsed->getAsArray() : nullptr;
-      if (!array || array->size() != 3) {
+    if (auto attribute = module->getAttr(kBridgeRequestedDivisorsAttr)) {
+      auto array = dyn_cast<DenseIntElementsAttr>(attribute);
+      if (!array || array.getType().getRank() != 1 ||
+          array.getNumElements() != 3 ||
+          array.getType().getElementTypeBitWidth() != 32) {
         reportFailure(module, "Bridge divisor vector is malformed");
         return signalPassFailure();
       }
       requestedDivisors.clear();
-      for (const llvm::json::Value &value : *array) {
-        auto divisor = value.getAsInteger();
-        if (!divisor || *divisor < 1 ||
-            !llvm::isPowerOf2_64(*divisor)) {
+      for (const APInt &value : array.getValues<APInt>()) {
+        int64_t divisor = value.getSExtValue();
+        if (divisor < 1 || !llvm::isPowerOf2_64(divisor)) {
           reportFailure(module, "Bridge divisor vector is not positive power-of-two");
           return signalPassFailure();
         }
-        requestedDivisors.push_back(*divisor);
+        requestedDivisors.push_back(divisor);
       }
     }
-    // Optional construction authority is upstream-only. Downstream route
-    // contracts must never select how Bridge constructs the ordinary loop.
-    if (auto bundle = module->getAttrOfType<StringAttr>(kBundleAttr)) {
-      auto parsed = llvm::json::parse(bundle.getValue());
-      if (!parsed) {
-        llvm::consumeError(parsed.takeError());
-        reportFailure(module, "Bridge construction authority is not JSON");
-        return signalPassFailure();
-      }
-      const auto *object = parsed->getAsObject();
-      const auto *contract = object ? object->getObject("contract") : nullptr;
-      const auto *parameters = contract ? contract->getObject("candidate_parameters") : nullptr;
-      if (!contract || !parameters ||
-          contract->getString("route_ref") != "l.bridge-only.default-route" ||
-          parameters->getInteger("bridge_factor") != factor) {
-        reportFailure(module, "Bridge accepts only independent construction authority");
-        return signalPassFailure();
-      }
+    // Bridge is configured only by its typed factor/divisor inputs. A route
+    // decision belongs to the later analysis cut, never to construction.
+    // Reject the old JSON envelope (including bridge-only envelopes), rather
+    // than keeping a hidden alternate construction protocol alive.
+    if (module->hasAttr(kBundleAttr)) {
+      reportFailure(module, "Bridge requires typed construction inputs, not a route plan bundle");
+      return signalPassFailure();
     }
     auto entry = findEntryPoint(module);
     if (failed(entry)) {

@@ -23,7 +23,11 @@ class CompilerFacts:
 def decode_facts(raw, *, num_warps, num_stages):
     if any(type(n) is not int or n < 1 for n in (num_warps, num_stages)):
         raise ValueError('invalid resolved launch configuration')
-    p = json.loads(raw)
+    # A compiler query returns a mapping directly. Text is accepted only for
+    # archived, chain-external snapshots, never as an IR transport.
+    p = json.loads(raw) if isinstance(raw, str) else raw
+    if not isinstance(p, dict):
+        raise ValueError('compiler facts must be a structured mapping')
     if p.get('schema') not in ('hbv.loop.static-facts.v16', 'l.core.planning-facts.v1') or p.get('extractable') is not True:
         raise ValueError('current extractable compiler facts required')
     rows = p['loop_census']

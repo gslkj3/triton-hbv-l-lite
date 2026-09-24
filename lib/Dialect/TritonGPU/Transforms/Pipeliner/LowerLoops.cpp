@@ -1197,12 +1197,7 @@ void lowerLoops(ModuleOp moduleOp) {
       "triton.hbv.l.backend-copy-width-attestation.v1";
   attestation["observation_stage"] = "ttgir_before_ptxas";
   attestation["loads"] = std::move(backendCopyWidthFacts);
-  std::string attestationText;
-  llvm::raw_string_ostream attestationStream(attestationText);
-  attestationStream << llvm::json::Value(std::move(attestation));
-  moduleOp->setAttr(
-      "tt.hbv.l.backend_copy_width_facts",
-      StringAttr::get(moduleOp.getContext(), attestationStream.str()));
+  emitBackendObservation(moduleOp, std::move(attestation));
 }
 
 } // namespace gpu

@@ -27,7 +27,15 @@ def test_native_jit_mode_switch_preserves_cache_and_warmup(monkeypatch):
         compiled=kernel[(1,)](x,y)
         torch.cuda.synchronize()
         assert torch.equal(y,x.reshape(4,32).sum(0))
-        assert ('tt.l_lite.default_route' in compiled.asm['ttir'])==(mode=='default')
+        assert 'tt.l_lite.default_route' not in compiled.asm['ttir']
+        assert hasattr(compiled.metadata, 'l_default_route') == (mode == 'default')
+        if mode == 'default':
+            assert compiled.metadata.l_default_route == 'l.nvidia.software_pipeline.v1'
+            for stage in ('ttir', 'ttgir'):
+                header = next(line for line in compiled.asm[stage].splitlines()
+                              if line.startswith('module '))
+                assert 'tt.hbv.' not in header and 'tt.loop_bridge.' not in header
+                assert 'tt.l_lite.' not in header
         assert compiled.metadata.l_lite_mode==mode
         results.append(compiled)
     assert results[0] is results[2]
@@ -70,6 +78,13 @@ def test_prediction_disabled_default_pipeline(with_loop, monkeypatch):
     assert result.stage_count==3
     assert result.route==(Route.PIPELINE.value if with_loop else 'native_no_pipeline_candidate')
     assert all(s in result.kernel.asm for s in ('ttgir','llir','ptx','cubin'))
+    observations = result.kernel.metadata.l_backend_observations
+    assert observations['schema'] == 'l.core.backend-observations.v1'
+    assert observations['stage'] == 'make_ttgir'
+    assert 'tt.hbv.l.backend_copy_width_facts' not in result.kernel.asm['ttgir']
+    if with_loop:
+        assert observations['records']
+        assert any(record['loads'] for record in observations['records'])
 
 pytestmark = pytest.mark.skipif(not os.environ.get('L_CORE_TEST_EXTENSION'),
                                reason='explicit compiler build required')

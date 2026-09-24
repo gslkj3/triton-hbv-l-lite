@@ -23,6 +23,7 @@
 #include "LCore/AffineInterval.h"
 #include "LCore/Certificate.h"
 #include "LCore/Plan.h"
+#include "LCore/TypedPlan.h"
 #include "LCore/GuardedMemoryPairs.h"
 #include <array>
 #include <map>
@@ -61,6 +62,21 @@ using namespace mlir::triton::lcore;
 namespace mlir::triton::lcore {
 std::unique_ptr<Pass> createBridgeDiscoverPass() {
   return std::make_unique<LoopBridgeDiscoverPass>();
+}
+llvm::json::Object queryPlanningFacts(ModuleOp module) {
+  // Native AxisInfo may annotate private callee arguments while solving its
+  // dataflow. Queries must not change the caller's compilation input.
+  OwningOpRef<ModuleOp> snapshot = module.clone();
+  return collectOrdinaryPlanningFacts(*snapshot);
+}
+llvm::json::Object queryBridgeDiscovery(ModuleOp module) {
+  OwningOpRef<ModuleOp> snapshot = module.clone();
+  return collectBridgeDiscovery(*snapshot);
+}
+DictionaryAttr makeDecisionAttribute(ModuleOp module, const llvm::json::Object &bundle,
+                                     std::string &reason) {
+  auto plan = parseBundle(bundle, kDecisionCompiler, reason);
+  return plan ? encodeDecision(*plan, module.getContext()) : DictionaryAttr();
 }
 std::unique_ptr<Pass> createBridgeConstructionPass() {
   return std::make_unique<LoopBridgeProgramCoarseningPass>();

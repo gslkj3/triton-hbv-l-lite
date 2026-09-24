@@ -6,7 +6,7 @@ from .state import Route
 
 
 def bind_default_decision(module, options, capability):
-    from triton._C.libtriton import ir, passes
+    from triton._C.libtriton import passes
     prepared=prepare_at_analysis_point(module,PreparationConfig(capability,options.num_warps,
                                                      options.num_stages))
     route='native_no_pipeline_candidate'
@@ -19,8 +19,8 @@ def bind_default_decision(module, options, capability):
         except UnsupportedCandidate:
             candidate=None
         if candidate is not None:
-            module.set_attr('tt.hbv.plan_bundle',ir.builder(module.context).get_string_attr(
-                candidate.plan.canonical_json()))
+            module.set_attr('tt.hbv.plan_bundle',passes.ttir.make_l_decision_attribute(
+                module,candidate.plan.to_dict()))
             route=Route.PIPELINE.value
-    module.set_attr('tt.l_lite.default_route',ir.builder(module.context).get_string_attr(route))
-    return module
+    # The route description is diagnostic output, not a compiler attribute.
+    return route

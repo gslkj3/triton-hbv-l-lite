@@ -1,6 +1,7 @@
 #include "ir.h"
 
 #include <optional>
+#include <map>
 #include <pybind11/cast.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
@@ -865,6 +866,18 @@ void init_triton_ir(py::module &&m) {
       .def("get_string_attr",
            [](TritonOpBuilder &self, std::string value) -> Attribute {
              return self.getBuilder().getStringAttr(value);
+           })
+      .def("get_int64_attr",
+           [](TritonOpBuilder &self, int64_t value) -> Attribute {
+             return self.getBuilder().getI64IntegerAttr(value);
+           })
+      .def("get_dictionary_attr",
+           [](TritonOpBuilder &self,
+              const std::map<std::string, Attribute> &values) -> Attribute {
+             SmallVector<NamedAttribute> attrs;
+             for (const auto &item : values)
+               attrs.push_back(self.getBuilder().getNamedAttr(item.first, item.second));
+             return self.getBuilder().getDictionaryAttr(attrs);
            })
       .def("get_disable_loop_licm_attr",
            [](TritonOpBuilder &self) -> Attribute {

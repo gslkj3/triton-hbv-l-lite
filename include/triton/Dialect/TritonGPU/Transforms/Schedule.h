@@ -7,6 +7,8 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/Support/JSON.h"
+#include <functional>
 #include <list>
 #include <vector>
 
@@ -14,6 +16,27 @@ namespace mlir {
 namespace triton {
 
 namespace gpu {
+
+// Optional, scoped diagnostics for the current compilation. Observations are
+// never IR attributes and cannot become optimization authority. A thread-local
+// sink also isolates concurrent compilations; nesting restores the outer sink.
+using BackendObservationSink =
+    std::function<void(ModuleOp, llvm::json::Object)>;
+inline thread_local BackendObservationSink *backendObservationSink = nullptr;
+class ScopedBackendObservations {
+public:
+  explicit ScopedBackendObservations(BackendObservationSink &sink)
+      : previous(backendObservationSink) { backendObservationSink = &sink; }
+  ~ScopedBackendObservations() { backendObservationSink = previous; }
+  ScopedBackendObservations(const ScopedBackendObservations &) = delete;
+  ScopedBackendObservations &operator=(const ScopedBackendObservations &) = delete;
+private:
+  BackendObservationSink *previous;
+};
+inline void emitBackendObservation(ModuleOp module, llvm::json::Object record) {
+  if (backendObservationSink)
+    (*backendObservationSink)(module, std::move(record));
+}
 
 /// Lower the loops to prepare them for pipeline expansion.
 void lowerLoops(ModuleOp moduleOp);

@@ -252,7 +252,7 @@ class CUDABackend(BaseBackend):
             pm.run(mod, 'make_ttir_prefix')
             if opt.l_lite_mode == 'default':
                 from triton.l_lite.core.native_default_pipeline import bind_default_decision
-                bind_default_decision(mod, opt, capability)
+                metadata['l_default_route'] = bind_default_decision(mod, opt, capability)
             else:
                 from triton.l_lite.core.analysis_hook import advise
                 advise(mod, metadata, opt, capability)
@@ -336,7 +336,8 @@ class CUDABackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_canonicalizer(pm)
 
-        pm.run(mod, 'make_ttgir')
+        metadata["l_backend_observations"] = passes.ttir.run_with_l_backend_observations(
+            pm, mod, 'make_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 

@@ -1,18 +1,11 @@
-import json
-import re
-import subprocess
-from pathlib import Path
 import pytest
-
-ROOT=Path(__file__).resolve().parents[4]
-OPT=ROOT/'build/l-lite-public/bin/triton-opt'
 
 
 def fixture(grid=4,offset=32,stride=8,binding=True,schema=2,y=1):
-    payload=json.dumps(dict(schema=f'triton.loop-bridge.runtime-scalars.v{schema}',grid=[grid,y],
-        **({'values_by_name':{}} if schema==2 else {'values':{}})),separators=(',',':'))
-    escaped=payload.replace('"','\\22')
-    attrs=f' attributes {{tt.loop_bridge.runtime_scalars = "{escaped}"}}' if binding else ''
+    attrs=(f' attributes {{tt.loop_bridge.runtime_scalars = '
+           f'{{schema = "triton.loop-bridge.runtime-scalars.v{schema}", '
+           f'grid = dense<[{grid}, {y}, 1]> : tensor<3xi32>, values_by_name = {{}}}}}}'
+           if binding else '')
     return 'module'+attrs+''' {
 tt.func public @partition(%out: !tt.ptr<f32>) {
 %pid = tt.get_program_id x : i32
@@ -41,10 +34,20 @@ tt.return
     ({'offset':0,'binding':False},True),
 ])
 def test_native_domain(tmp_path,kwargs,expected):
+    from triton._C.libtriton import ir, passes
     p=tmp_path/'test.mlir';p.write_text(fixture(**kwargs))
-    run=subprocess.run([str(OPT),str(p),'-triton-loop-bridge-discover'],capture_output=True,text=True,timeout=30)
-    assert run.returncode==0,run.stderr
-    raw,=re.findall(r'tt\.loop_bridge\.discovery = "((?:[^"\\]|\\.)*)"',run.stdout)
-    decoded=re.sub(r'\\([0-9A-Fa-f]{2}|.)',lambda m:chr(int(m[1],16)) if len(m[1])==2 else m[1],raw)
-    facts=json.loads(decoded)
+    context = ir.context()
+    ir.load_dialects(context)
+    module = ir.parse_mlir_module(str(p), context)
+    manager = ir.pass_manager(context)
+    passes.ttir.add_loop_bridge_discover(manager)
+    if kwargs.get('schema', 2) != 2:
+        with pytest.raises(RuntimeError):
+            manager.run(module, 'invalid-runtime-binding')
+        return
+    manager.run(module, 'runtime-binding')
+    before = str(module)
+    facts = passes.ttir.query_l_bridge_discovery(module)
+    assert str(module) == before
+    assert 'tt.loop_bridge.discovery' not in before
     assert facts['construction_legal']==expected,facts

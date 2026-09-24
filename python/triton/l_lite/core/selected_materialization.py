@@ -34,10 +34,10 @@ def materialize_selected(bound, *, extension):
         path=Path(directory)/'selected-input.mlir'
         path.write_text(text)
         module=ir.parse_mlir_module(str(path),context)
-    if module.get_operation().get_str_attr('tt.hbv.plan_bundle') is not None:
+    if extension.passes.ttir.has_l_decision(module):
         raise ValueError('prepared input already contains a decision')
-    module.set_attr('tt.hbv.plan_bundle',ir.builder(context).get_string_attr(
-        bound.planned.plan.canonical_json()))
+    module.set_attr('tt.hbv.plan_bundle',extension.passes.ttir.make_l_decision_attribute(
+        module,bound.planned.plan.to_dict()))
     manager=ir.pass_manager(context)
     passes=extension.passes.ttir
     order=('add_hbv_loop_decision','add_loop_unroll',

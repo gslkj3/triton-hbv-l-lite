@@ -224,23 +224,24 @@ bool boundedPointerDoesNotWrap(Value pointer, Value root, Value pid,
 bool provesBoundedStoreUnion(ArrayRef<StoreOp> stores, Value root,
                              GetProgramIdOp pid) {
   auto module = pid->getParentOfType<ModuleOp>();
-  auto raw = module->getAttrOfType<StringAttr>(kBridgeRuntimeScalarsAttr);
-  if (!raw || pid.getAxisAsInt() != 0)
+  auto object = module->getAttrOfType<DictionaryAttr>(kBridgeRuntimeScalarsAttr);
+  if (!object || pid.getAxisAsInt() != 0)
     return false;
-  auto parsed = llvm::json::parse(raw.getValue());
-  auto *object = parsed ? parsed->getAsObject() : nullptr;
-  auto *grid = object ? object->getArray("grid") : nullptr;
-  if (!object || object->getString("schema") != "triton.loop-bridge.runtime-scalars.v2" ||
-      !grid || grid->empty() || grid->size() > 3)
+  auto grid = object.getAs<DenseIntElementsAttr>("grid");
+  auto schema = object.getAs<StringAttr>("schema");
+  if (!schema || schema.getValue() != "triton.loop-bridge.runtime-scalars.v2" ||
+      !grid || grid.getType().getRank() != 1 ||
+      grid.getType().getElementTypeBitWidth() != 32 ||
+      grid.getNumElements() < 1 || grid.getNumElements() > 3)
     return false;
-  auto extent = (*grid)[0].getAsInteger();
+  int64_t extent = (*grid.getValues<APInt>().begin()).getSExtValue();
   auto bound = pid->getAttrOfType<IntegerAttr>(kBridgeAxisExtentAttr);
-  if (!extent || *extent < 1 || *extent > INT32_MAX ||
-      !bound || bound.getInt() != *extent)
+  if (extent < 1 || extent > INT32_MAX ||
+      !bound || bound.getInt() != extent)
     return false;
   // Other varying launch axes require their own joint-domain proof.
-  for (unsigned axis = 1; axis < grid->size(); ++axis)
-    if ((*grid)[axis].getAsInteger() != int64_t(1))
+  for (auto [axis, value] : llvm::enumerate(grid.getValues<APInt>()))
+    if (axis > 0 && value.getSExtValue() != 1)
       return false;
   SmallVector<AffinePidFootprint> parts;
   for (StoreOp store : stores) {
@@ -249,7 +250,7 @@ bool provesBoundedStoreUnion(ArrayRef<StoreOp> stores, Value root,
       continue;
     unsigned budget = 512;
     if (!boundedPointerDoesNotWrap(store.getPtr(), root, pid.getResult(),
-                                   *extent, budget))
+                                   extent, budget))
       return false;
     auto f = pointerFootprint(store.getPtr(), root, pid.getResult());
     if (!f || !provesDisjointPrograms(*f))
@@ -273,8 +274,8 @@ bool provesBoundedStoreUnion(ArrayRef<StoreOp> stores, Value root,
         return false;
       __int128 low = -floorDiv(-(static_cast<__int128>(b.localMin) - a.localMax), stride);
       __int128 high = floorDiv(static_cast<__int128>(b.localMax) - a.localMin, stride);
-      low = std::max(low, -static_cast<__int128>(*extent - 1));
-      high = std::min(high, static_cast<__int128>(*extent - 1));
+      low = std::max(low, -static_cast<__int128>(extent - 1));
+      high = std::min(high, static_cast<__int128>(extent - 1));
       if (low <= high && (low < 0 || high > 0))
         return false;
     }
