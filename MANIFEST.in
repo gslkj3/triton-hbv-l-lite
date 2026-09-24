@@ -3,6 +3,7 @@ graft cmake
 graft docs
 graft include
 graft lib
+graft l_lite_core
 graft python/src
 graft python/test
 graft python/triton

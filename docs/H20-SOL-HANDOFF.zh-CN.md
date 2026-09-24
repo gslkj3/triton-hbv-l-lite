@@ -38,6 +38,13 @@ CUDA_VISIBLE_DEVICES=0 L_CORE_TEST_GPU=1 python -I -S \
 
 ## 用户kernel调用入口
 
+无预测、无搜索的默认路径：`triton.l_lite.core.default_entry.default_kernel`。
+参数为kernel、实参、grid、binding及可选kernel_kwargs/target；Bridge默认1，
+只提交原生默认stage的软件流水候选，无法流水时仍继续普通原生编译。
+它不会调用预测器或autotune，不是预测失败后的回退。默认入口并未全局替换
+原生JITFunction.run；使用者需明确调用此入口。已有循环内的显式优化提示由
+经过验证的流水计划接管；不支持流水的其他循环仍遵守原生编译行为。
+
 `triton.l_lite.core.lite_entry.autotune_kernel`接受已装饰的`@triton.jit`函数和
 实际参数；不用用户手写AST签名。`kernel_kwargs`传constexpr和原生编译选项，
 `grid`可为元组或接受已绑定参数的函数。

@@ -2,6 +2,42 @@
 import os
 import pytest
 
+@pytest.mark.skipif(os.environ.get('L_CORE_TEST_GPU')!='1',reason='GPU default mode')
+@pytest.mark.parametrize('with_loop', [False, True])
+def test_prediction_disabled_default_pipeline(with_loop, monkeypatch):
+    import triton
+    import triton.language as tl
+    import torch
+    from triton.runtime.autotuner import Autotuner
+    from triton.l_lite.core.default_entry import default_kernel
+    from triton.l_lite.core.compiler import CompilerBinding
+    from triton.l_lite.core.state import Route
+    def forbidden(*args, **kwargs):
+        raise AssertionError('default mode invoked predictor or autotuner')
+    monkeypatch.setattr(Autotuner,'run',forbidden)
+
+    @triton.jit
+    def kernel(x,y,LOOP:tl.constexpr):
+        offsets=tl.arange(0,32)
+        if LOOP:
+            acc=tl.full((32,),0,tl.int32)
+            for i in range(4):
+                acc+=tl.load(x+i*32+offsets)
+            tl.store(y+offsets,acc)
+        else:
+            tl.store(y+offsets,tl.load(x+offsets))
+
+    x=torch.arange(128,dtype=torch.int32,device='cuda')
+    y=torch.empty((32,),dtype=torch.int32,device='cuda')
+    result=default_kernel(kernel,x,y,grid=(1,),kernel_kwargs={'LOOP':with_loop},
+        binding=CompilerBinding('default-test','7c56a5e40f7fd928dfd5c72902d5def0097db73a','build'))
+    torch.cuda.synchronize()
+    assert torch.equal(y,x.reshape(4,32).sum(0) if with_loop else x[:32])
+    assert result.bridge_factor==1
+    assert result.stage_count==3
+    assert result.route==(Route.PIPELINE.value if with_loop else 'native_no_pipeline_candidate')
+    assert all(s in result.kernel.asm for s in ('ttgir','llir','ptx','cubin'))
+
 pytestmark = pytest.mark.skipif(not os.environ.get('L_CORE_TEST_EXTENSION'),
                                reason='explicit compiler build required')
 
