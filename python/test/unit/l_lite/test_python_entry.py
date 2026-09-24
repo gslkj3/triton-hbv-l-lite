@@ -2,6 +2,39 @@
 import os
 import pytest
 
+
+@pytest.mark.skipif(os.environ.get('L_CORE_TEST_GPU')!='1',reason='GPU native JIT entry')
+def test_native_jit_mode_switch_preserves_cache_and_warmup(monkeypatch):
+    import triton
+    import triton.language as tl
+    import torch
+    from triton.runtime.autotuner import Autotuner
+    def forbidden(*args,**kwargs):
+        raise AssertionError('default native JIT must not autotune')
+    monkeypatch.setattr(Autotuner,'run',forbidden)
+    @triton.jit
+    def kernel(x,y):
+        lane=tl.arange(0,32)
+        acc=tl.full((32,),0,tl.int32)
+        for i in range(4):
+            acc+=tl.load(x+i*32+lane)
+        tl.store(y+lane,acc)
+    x=torch.arange(128,dtype=torch.int32,device='cuda')
+    y=torch.empty((32,),dtype=torch.int32,device='cuda')
+    results=[]
+    for mode in ('off','default','off','default'):
+        monkeypatch.setenv('TRITON_L_LITE_MODE',mode)
+        compiled=kernel[(1,)](x,y)
+        torch.cuda.synchronize()
+        assert torch.equal(y,x.reshape(4,32).sum(0))
+        assert ('tt.l_lite.default_route' in compiled.asm['ttir'])==(mode=='default')
+        assert compiled.metadata.l_lite_mode==mode
+        results.append(compiled)
+    assert results[0] is results[2]
+    assert results[1] is results[3]
+    assert results[0] is not results[1]
+    assert kernel.warmup(x,y,grid=(1,)) is results[1]
+
 @pytest.mark.skipif(os.environ.get('L_CORE_TEST_GPU')!='1',reason='GPU default mode')
 @pytest.mark.parametrize('with_loop', [False, True])
 def test_prediction_disabled_default_pipeline(with_loop, monkeypatch):

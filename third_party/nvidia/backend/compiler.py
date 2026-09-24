@@ -104,6 +104,7 @@ def sm_arch_from_capability(capability: int):
 
 @dataclass(frozen=True)
 class CUDAOptions:
+    l_lite_mode: str = "off"
     num_warps: int = 4
     num_ctas: int = 1
     num_stages: int = 3
@@ -175,7 +176,10 @@ class CUDABackend(BaseBackend):
             opts["debug"] = True
 
         args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
+        args['l_lite_mode'] = os.environ.get('TRITON_L_LITE_MODE', 'off')
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
+        if args['l_lite_mode'] not in ('off', 'default'):
+            raise ValueError('l_lite_mode currently supports off/default only')
         capability = int(self._parse_arch(args["arch"]))
 
         if args.get("num_ctas", 1) > 1 and capability < 90:
@@ -228,6 +232,9 @@ class CUDABackend(BaseBackend):
 
     @staticmethod
     def make_ttir(mod, metadata, opt, capability):
+        if opt.l_lite_mode == 'default':
+            from triton.l_lite.core.native_default_pipeline import make_default_ttir
+            return make_default_ttir(mod, opt, capability)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)

@@ -1,4 +1,5 @@
 from __future__ import annotations, division
+import os
 import ast
 import copy
 import hashlib
@@ -693,6 +694,11 @@ class JITFunction(JITCallable, KernelInterface[T]):
         return options, signature, constexprs, attrs
 
     def run(self, *args, grid, warmup, **kwargs):
+        # Bind the mode before the JIT cache key is formed, not only inside the
+        # compiler backend. Otherwise a warmed native kernel bypasses the mode.
+        l_mode = os.environ.get('TRITON_L_LITE_MODE')
+        if l_mode is not None:
+            kwargs.setdefault('l_lite_mode', l_mode)
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
         kwargs["instrumentation_mode"] = knobs.compilation.instrumentation_mode
 
